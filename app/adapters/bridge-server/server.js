@@ -10,6 +10,20 @@ const PORT = process.env.PORT || 7789;
 // WebUI integration constants
 const WEBUI_PORT = 7788;
 const WEBUI_URL = `http://localhost:${WEBUI_PORT}`;
+let webUIAvailable = false;
+
+// Check if Web UI is available
+async function checkWebUIAvailability() {
+  try {
+    const response = await fetch(`${WEBUI_URL}/`, {
+      timeout: 2000
+    });
+    webUIAvailable = response.ok;
+  } catch (error) {
+    webUIAvailable = false;
+  }
+  return webUIAvailable;
+}
 
 // Middleware
 app.use(cors());
@@ -129,7 +143,7 @@ app.post('/session', (req, res) => {
   createSession(req, res);
 });
 
-function createSession(req, res) {
+async function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
   const sessionId = `session-${Date.now()}`;
   const useWebUIBrowser = req.body.settings?.useWebUIBrowser || false;
@@ -140,8 +154,8 @@ function createSession(req, res) {
     createdAt: new Date(),
     useWebUIBrowser
   });
-  
-  // Determine session URL based on browser mode
+
+  // Always create session successfully regardless of Web UI availability
   const sessionUrl = useWebUIBrowser 
     ? `${WEBUI_URL}/browser/${sessionId}`
     : `http://localhost:3000/browser/${sessionId}`;
@@ -326,8 +340,9 @@ app.post('/execute', async (req, res) => {
     
     const session = activeSessions.get(sessionId);
     
-    if (session?.useWebUIBrowser) {
+    if (session?.useWebUIBrowser && await checkWebUIAvailability()) {
       try {
+        // Try Web UI execution if available
         const webUiResponse = await fetch(`${WEBUI_URL}/api/browser/execute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -346,6 +361,7 @@ app.post('/execute', async (req, res) => {
         if (webUiResponse.ok) {
           const data = await webUiResponse.json();
           if (data.success) {
+            console.log('[Execute] Successfully executed via Web UI');
             return res.json({
               success: true,
               result: {
@@ -358,8 +374,7 @@ app.post('/execute', async (req, res) => {
           }
         }
       } catch (error) {
-        console.error('[Execute] WebUI communication failed:', error);
-        throw new Error(`WebUI communication failed: ${error.message}`);
+        console.error('[Execute] WebUI communication failed, falling back to mock:', error);
       }
     }
     
@@ -461,18 +476,41 @@ app.post('/api/sessions/:sessionId/navigate', (req, res) => {
 });
 
 // Delete session
-app.delete('/session', (req, res) => {
+app.delete('/session', async (req, res) => {
   const { sessionId } = req.body;
   
   console.log(`[Session] Closing session ${sessionId}`);
   
-  if (activeSessions.has(sessionId)) {
-    activeSessions.delete(sessionId);
-    res.json({ success: true, message: 'Session closed successfully' });
-  } else {
-    res.status(404).json({
+  if (!activeSessions.has(sessionId)) {
+    return res.status(404).json({
       success: false,
       error: `Session ${sessionId} not found`
+    });
+  }
+
+  const session = activeSessions.get(sessionId);
+  
+  try {
+    if (session?.useWebUIBrowser && await checkWebUIAvailability()) {
+      try {
+        // Notify Web UI to clean up session if available
+        await fetch(`${WEBUI_URL}/api/agent/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+      } catch (error) {
+        console.error('[Session] WebUI cleanup failed (non-critical):', error);
+      }
+    }
+    
+    activeSessions.delete(sessionId);
+    res.json({ success: true, message: 'Session closed successfully' });
+  } catch (error) {
+    console.error(`[Session] Error closing session: ${error}`);
+    res.status(500).json({
+      success: false,
+      error: `Error closing session: ${error.message}`
     });
   }
 });
