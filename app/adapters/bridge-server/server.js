@@ -179,45 +179,48 @@ app.post('/intent', async (req, res) => {
       });
     }
     
-    // Try to fetch from WebUI if available, otherwise use mock
-    try {
-      // Try to communicate with WebUI first
-      const webUiResponse = await fetch(`${WEBUI_URL}/api/agent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          intent: goal,
-          history: previousSteps.map(step => step.tool + ': ' + JSON.stringify(step.args))
-        })
-      });
-      
-      if (webUiResponse.ok) {
-        const webUiData = await webUiResponse.json();
-        
-        if (webUiData.success) {
-          // Convert WebUI response to Open Operator format
-          const response = {
-            success: true,
-            result: {
-              tool: context.isFirstStep ? 'NAVIGATE' : 'EXTRACT',
-              args: context.isFirstStep ? 
-                { url: 'https://example.com' } : 
-                { selector: 'body' },
-              // Format response to match ChatFeed expectations
-              text: 'Navigating to webpage',
-              reasoning: webUiData.result?.thinking || 'Executing next action based on goal',
-              instruction: context.isFirstStep ? 
-                'Navigate to website' : 
-                'Extract information from page'
+    // Get session ID from either body or first previous step
+    const sessionId = req.body.sessionId || 
+                     (previousSteps.length > 0 ? previousSteps[0].sessionId : null);
+    const session = sessionId ? activeSessions.get(sessionId) : null;
+    
+    if (session?.useWebUIBrowser) {
+      try {
+        const webUiResponse = await fetch(`${WEBUI_URL}/api/agent/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            task: goal,
+            history: previousSteps.map(step => ({
+              action: step.tool,
+              args: step.args,
+              result: step.text
+            })),
+            context: {
+              is_first_step: context.isFirstStep || false
             }
-          };
-          
-          console.log('[Intent] Response:', response);
-          return res.json(response);
+          })
+        });
+        
+        if (webUiResponse.ok) {
+          const webUiData = await webUiResponse.json();
+          if (webUiData.success) {
+            return res.json({
+              success: true,
+              result: {
+                tool: webUiData.result?.tool || 'NAVIGATE',
+                args: webUiData.result?.args || {},
+                text: webUiData.result?.text || 'Executing action',
+                reasoning: webUiData.result?.reasoning || 'Processing request',
+                instruction: webUiData.result?.instruction || 'Perform action'
+              }
+            });
+          }
         }
+      } catch (error) {
+        console.error('[Intent] WebUI communication failed:', error);
       }
-    } catch (error) {
-      console.log('[Intent] WebUI communication failed, using mock response:', error);
     }
     
     // Fallback to mock response
@@ -321,40 +324,54 @@ app.post('/execute', async (req, res) => {
       });
     }
     
-    // Try communication with WebUI first
-    try {
-      const webUiResponse = await fetch(`${WEBUI_URL}/api/browser`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          sessionId,
-          action: step.tool.toLowerCase(),
-          params: step.args
-        })
-      });
-      
-      if (webUiResponse.ok) {
-        const data = await webUiResponse.json();
+    const session = activeSessions.get(sessionId);
+    
+    if (session?.useWebUIBrowser) {
+      try {
+        const webUiResponse = await fetch(`${WEBUI_URL}/api/browser/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            command: step.tool.toLowerCase(),
+            parameters: step.args,
+            metadata: {
+              text: step.text,
+              reasoning: step.reasoning,
+              instruction: step.instruction
+            }
+          })
+        });
         
-        if (data.success) {
-          return res.json({
-            success: true,
-            extraction: data.result || mockBrowserResponse(step.tool.toLowerCase(), step.args).extraction
-          });
+        if (webUiResponse.ok) {
+          const data = await webUiResponse.json();
+          if (data.success) {
+            return res.json({
+              success: true,
+              result: {
+                ...data.result,
+                text: step.text,
+                reasoning: step.reasoning,
+                instruction: step.instruction
+              }
+            });
+          }
         }
+      } catch (error) {
+        console.error('[Execute] WebUI communication failed:', error);
+        throw new Error(`WebUI communication failed: ${error.message}`);
       }
-    } catch (error) {
-      console.log('[Execute] WebUI communication failed, using mock response:', error);
     }
     
-    // Fallback to mock
+    // Fallback to mock if Web UI not selected or failed
     const mockResult = mockBrowserResponse(step.tool.toLowerCase(), step.args);
-    
     res.json({
       success: true,
-      extraction: mockResult.extraction || {
-        url: 'https://example.com',
-        content: '<html><body><h1>Example Page</h1></body></html>'
+      result: {
+        ...mockResult,
+        text: step.text,
+        reasoning: step.reasoning,
+        instruction: step.instruction
       }
     });
   } catch (error) {
