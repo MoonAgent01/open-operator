@@ -1,39 +1,12 @@
-import { NextResponse } from 'next/server';
-import { stagehand, handleIntent } from '../../lib/stagehand-mock';
-import { browserbase } from '../../lib/browserbase-mock';
-import { debuglog } from 'util';
+import { NextRequest, NextResponse } from 'next/server';
 
-const debug = debuglog('agent-route');
-
-interface ViewportSettings {
-  width: number;
-  height: number;
-}
-
-interface StealthSettings {
-  enabled?: boolean;
-  solveCaptchas?: boolean;
-  fingerprint?: {
-    browsers?: string[];
-    devices?: string[];
-    locales?: string[];
-    operatingSystems?: string[];
-  };
-}
-
-interface SessionSettings {
-  viewport?: ViewportSettings;
-  stealth?: StealthSettings;
-  headless?: boolean;
-  timeout?: number;
-  metadata?: Record<string, any>;
-}
-
+// Define the supported step types
 interface Step {
   tool: string;
   args: Record<string, any>;
-  reason?: string;
-  metadata?: Record<string, any>;
+  text: string;
+  reasoning: string;
+  instruction: string;
 }
 
 // Helper function to validate session ID
@@ -78,15 +51,6 @@ function validateStep(step: Step | undefined): NextResponse | null {
   return null;
 }
 
-// Helper function to check session status
-async function checkSessionStatus(sessionId: string): Promise<boolean> {
-  try {
-    return await browserbase.checkSession(sessionId);
-  } catch {
-    return false;
-  }
-}
-
 export async function GET() {
   return NextResponse.json({ 
     success: true,
@@ -105,29 +69,15 @@ export async function GET() {
   });
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { goal, sessionId, previousSteps = [], action, settings = {} } = body;
-
-    debug('Processing request:', { action, sessionId, goal });
+    const { goal, sessionId, previousSteps = [], action } = body;
     
     // Validate session for all actions except START
     if (action !== 'START') {
       const sessionError = validateSession(sessionId);
       if (sessionError) return sessionError;
-
-      // Check if session is still active
-      const isActive = await checkSessionStatus(sessionId);
-      if (!isActive) {
-        return NextResponse.json(
-          { 
-            success: false,
-            error: 'Session is no longer active' 
-          },
-          { status: 400 }
-        );
-      }
     }
 
     // Handle different action types
@@ -136,45 +86,67 @@ export async function POST(request: Request) {
         const goalError = validateGoal(goal);
         if (goalError) return goalError;
 
-        debug('Starting new goal:', goal);
-        
+        console.log('Starting new session for goal:', goal);
+
         try {
-          // Set metadata for the goal if provided
-          if (settings.metadata) {
-            stagehand.setGoalMetadata(settings.metadata);
+          // Create a session by calling the bridge server
+          const sessionResponse = await fetch('http://localhost:7789/session', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              contextId: goal,
+              timezone: 'UTC',
+              settings: {
+                browserSettings: {
+                  headless: false,
+                  useExistingBrowser: false,
+                  keepBrowserOpen: true,
+                  keepBrowserOpenBetweenTasks: true,
+                  windowSize: { width: 1366, height: 768 },
+                  showBrowser: true,
+                  useOwnBrowser: false
+                },
+                metadata: { source: 'open-operator', version: '1.0.0' }
+              }
+            }),
+          });
+
+          const sessionData = await sessionResponse.json();
+          
+          if (!sessionData.success) {
+            throw new Error(sessionData.error || 'Failed to create session');
           }
 
-          // Create a new session with enhanced settings
-          const session = await browserbase.createSession({
-            contextId: goal.substring(0, 32), // Use truncated goal as context ID
-            settings: {
-              viewport: settings.viewport,
-              stealth: {
-                enabled: true,
-                solveCaptchas: true,
-                fingerprint: settings.stealth?.fingerprint
-              },
-              headless: settings.headless ?? false,
-              timeout: settings.timeout || 30000,
-              metadata: settings.metadata
-            }
+          console.log('Session created:', sessionData);
+
+          // Get first step from bridge server
+          const intentResponse = await fetch('http://localhost:7789/intent', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              goal: goal,
+              context: { isFirstStep: true }
+            }),
           });
 
-          // Start processing the intent
-          const firstStep = await handleIntent(goal, stagehand);
+          const intentData = await intentResponse.json();
           
-          debug('Session created and first step generated:', {
-            sessionId: session.id,
-            step: firstStep
-          });
+          if (!intentData.success) {
+            throw new Error(intentData.error || 'Failed to get initial step');
+          }
 
-          return NextResponse.json({ 
+          return NextResponse.json({
             success: true,
-            sessionId: session.id,
-            result: firstStep,
-            steps: [firstStep],
+            sessionId: sessionData.sessionId,
+            result: intentData.result,
+            steps: [intentData.result],
             done: false,
-            debugUrl: session.debugUrl
+            sessionUrl: sessionData.sessionUrl,
+            debugUrl: sessionData.debugUrl
           });
         } catch (error: any) {
           console.error('Error starting session:', error);
@@ -192,20 +164,34 @@ export async function POST(request: Request) {
         const goalError = validateGoal(goal);
         if (goalError) return goalError;
 
-        debug('Getting next step:', { goal, previousSteps });
+        console.log('Getting next step for:', { goal, sessionId });
+        console.log('Previous steps:', previousSteps);
 
         try {
-          // Get next action from Stagehand
-          const nextStep = await stagehand.getNextStep(goal, previousSteps);
-          const allSteps = stagehand.getHistory();
+          // Get next action from bridge server
+          const intentResponse = await fetch('http://localhost:7789/intent', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              goal,
+              previousSteps,
+              sessionId
+            }),
+          });
+
+          const intentData = await intentResponse.json();
           
-          debug('Next step generated:', nextStep);
-          
+          if (!intentData.success) {
+            throw new Error(intentData.error || 'Failed to get next step');
+          }
+
           return NextResponse.json({
             success: true,
-            result: nextStep,
-            steps: allSteps,
-            done: nextStep.tool === "CLOSE"
+            result: intentData.result,
+            steps: [...previousSteps, intentData.result],
+            done: intentData.result.tool === "CLOSE"
           });
         } catch (error: any) {
           console.error('Error getting next step:', error);
@@ -224,17 +210,30 @@ export async function POST(request: Request) {
         const stepError = validateStep(step);
         if (stepError) return stepError;
 
-        debug('Executing step:', { sessionId, step });
+        console.log('Executing step:', { sessionId, step });
 
         try {
-          // Execute the step using Browserbase
-          const extraction = await browserbase.executeStep(sessionId, step);
+          // Execute step via bridge server
+          const executeResponse = await fetch('http://localhost:7789/execute', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sessionId,
+              step
+            }),
+          });
 
-          debug('Step execution result:', extraction);
+          const executeData = await executeResponse.json();
+          
+          if (!executeData.success) {
+            throw new Error(executeData.error || 'Failed to execute step');
+          }
 
           return NextResponse.json({
             success: true,
-            extraction,
+            extraction: executeData.extraction,
             done: step.tool === "CLOSE"
           });
         } catch (error: any) {

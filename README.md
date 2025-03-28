@@ -1,88 +1,85 @@
-# Open Operator
+# Open Operator + Web UI Integration
 
-> [!WARNING]
-> This is simply a proof of concept.
-> Browserbase aims not to compete with web agents, but rather to provide all the necessary tools for anybody to build their own web agent. We strongly recommend you check out both [Browserbase](https://www.browserbase.com) and our open source project [Stagehand](https://www.stagehand.dev) to build your own web agent.
+This project integrates Open Operator as a frontend with Web UI as a backend for browser automation. The integration uses a bridge server to facilitate communication between components.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fbrowserbase%2Fopen-operator&env=OPENAI_API_KEY,BROWSERBASE_API_KEY,BROWSERBASE_PROJECT_ID&envDescription=API%20keys%20needed%20to%20run%20Open%20Operator&envLink=https%3A%2F%2Fgithub.com%2Fbrowserbase%2Fopen-operator%23environment-variables)
+## Architecture
 
-## Getting Started
+The system is composed of three main components:
 
-First, install the dependencies for this repository. This requires [pnpm](https://pnpm.io/installation#using-other-package-managers).
+1. **Open Operator Frontend** - Modern Next.js UI for interacting with the AI agent
+2. **Bridge Server** - Node.js + Express server that handles communication between frontend and backend
+3. **Web UI Backend** - Python-based browser automation and AI agent engine
 
-<!-- This doesn't work with NPM, haven't tested with yarn -->
+## Quick Start
 
-```bash
-pnpm install
-```
-
-Next, copy the example environment variables:
+To start all components at once, run:
 
 ```bash
-cp .env.example .env.local
+cd "D:/AI Agent"
+start-open-operator.bat
 ```
 
-You'll need to set up your API keys:
+This will launch:
+- Web UI backend on port 7788
+- Bridge server on port 7789
+- Open Operator frontend on port 3000
 
-1. Get your OpenAI API key from [OpenAI's dashboard](https://platform.openai.com/api-keys)
-2. Get your Browserbase API key and project ID from [Browserbase](https://www.browserbase.com)
+## Components
 
-Update `.env.local` with your API keys:
+### Bridge Server
 
-- `OPENAI_API_KEY`: Your OpenAI API key
-- `BROWSERBASE_API_KEY`: Your Browserbase API key
-- `BROWSERBASE_PROJECT_ID`: Your Browserbase project ID
+The bridge server (in `app/adapters/bridge-server`) is the critical component that handles communication between the frontend and backend. It:
 
-Then, run the development server:
+- Creates browser sessions
+- Forwards agent commands
+- Provides fallback mock responses when needed
+- Handles errors and ensures resilient operation
 
-<!-- This doesn't work with NPM, haven't tested with yarn -->
+### Frontend UI
 
-```bash
-pnpm dev
-```
+The Open Operator frontend provides a clean interface for:
+- Entering goals/tasks for the agent
+- Viewing browser sessions
+- Monitoring agent progress
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see Open Operator in action.
+### Integration Points
 
-## How It Works
+The main integration points are:
 
-Building a web agent is a complex task. You need to understand the user's intent, convert it into headless browser operations, and execute actions, each of which can be incredibly complex on their own.
+1. **Session Management**: Creating and managing browser sessions
+2. **Agent Requests**: Forwarding user goals to the AI agent
+3. **Browser Control**: Executing browser actions based on agent decisions
 
-![public/agent_mess.png](public/agent_mess.png)
+## Troubleshooting
 
-Stagehand is a tool that helps you build web agents. It allows you to convert natural language into headless browser operations, execute actions on the browser, and extract results back into structured data.
+If you encounter "Failed to handle intent" errors:
 
-![public/stagehand_clean.png](public/stagehand_clean.png)
+1. Make sure all three components are running
+2. Check the bridge server logs for details
+3. Verify port configurations in `.bridge_port-port` and `.webui_port-port` files
+4. Ensure Web UI backend is properly configured for API access
 
-Under the hood, we have a very simple agent loop that just calls Stagehand to convert the user's intent into headless browser operations, and then calls Browserbase to execute those operations.
+## Development
 
-![public/agent_loop.png](public/agent_loop.png)
+### Adding New Features
 
-Stagehand uses Browserbase to execute actions on the browser, and OpenAI to understand the user's intent.
+To extend the integration:
 
-For more on this, check out the code at [this commit](https://github.com/browserbase/open-operator/blob/6f2fba55b3d271be61819dc11e64b1ada52646ac/index.ts).
+1. Frontend components are in `app/components`
+2. API endpoints are in `app/api`
+3. Bridge server logic is in `app/adapters/bridge-server`
 
-### Key Technologies
+### Debugging
 
-- **[Browserbase](https://www.browserbase.com)**: Powers the core browser automation and interaction capabilities
-- **[Stagehand](https://www.stagehand.dev)**: Handles precise DOM manipulation and state management
-- **[Next.js](https://nextjs.org)**: Provides the modern web framework foundation
-- **[OpenAI](https://openai.com)**: Enable natural language understanding and decision making
+- Bridge server logs provide valuable information about request/response flow
+- Python bridge logs show communications with Web UI
+- Frontend network tab can show API request details
 
-## Contributing
+## Port Configuration
 
-We welcome contributions! Whether it's:
+The default ports are:
+- Web UI backend: 7788
+- Bridge server: 7789
+- Frontend: 3000
 
-- Adding new features
-- Improving documentation
-- Reporting bugs
-- Suggesting enhancements
-
-Please feel free to open issues and pull requests.
-
-## License
-
-Open Operator is open source software licensed under the MIT license.
-
-## Acknowledgments
-
-This project is inspired by OpenAI's Operator feature and builds upon various open source technologies including Next.js, React, Browserbase, and Stagehand.
+These can be configured in the restart-services.bat file.

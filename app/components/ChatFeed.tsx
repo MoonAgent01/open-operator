@@ -184,7 +184,28 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
               const nextStepData = await nextStepResponse.json();
 
               if (!nextStepData.success) {
-                throw new Error("Failed to get next step");
+                console.error("Failed to get next step:", nextStepData.error || "Unknown error");
+                
+                // Add error as a step instead of throwing
+                const errorStep = {
+                  text: "Error occurred",
+                  reasoning: `Failed to get next step: ${nextStepData.error || "Unknown error"}`,
+                  tool: "CLOSE" as const,
+                  instruction: "Ending session due to error",
+                  stepNumber: agentStateRef.current.steps.length + 1,
+                };
+                
+                agentStateRef.current = {
+                  ...agentStateRef.current,
+                  steps: [...agentStateRef.current.steps, errorStep],
+                };
+                
+                setUiState((prev) => ({
+                  ...prev,
+                  steps: agentStateRef.current.steps,
+                }));
+                
+                break;
               }
 
               // Add the next step to UI immediately after receiving it

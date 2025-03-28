@@ -27,32 +27,51 @@ export interface AgentRunResponse {
 
 export class WebUIClient {
     private apiUrl: string;
+    private sessionId: string | null = null;
 
     constructor() {
+        // Get the API URL from environment or use default
         this.apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:7789';
         console.log(`WebUI Client initialized with API URL: ${this.apiUrl}`);
     }
 
-    async createSession(options: { contextId?: string; settings?: any } = {}): Promise<SessionResponse> {
-        console.log(`Creating new session with options: ${JSON.stringify(options)}`);
-        const response = await fetch(`${this.apiUrl}/api/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contextId: options.contextId || '',
-                settings: options.settings || {}
-            })
-        });
+    async createSession(options: any = {}): Promise<SessionResponse> {
+        console.log(`Creating new session with options:`, options);
+        try {
+            // First try with /api prefix
+            const response = await fetch(`${this.apiUrl}/api/session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(options)
+            });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to create session: ${errorText}`);
-            throw new Error(`Failed to create session: ${errorText}`);
+            if (!response.ok) {
+                console.warn(`Failed with /api/session, trying /session...`);
+                // Try without /api prefix
+                const fallbackResponse = await fetch(`${this.apiUrl}/session`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(options)
+                });
+
+                if (!fallbackResponse.ok) {
+                    const errorText = await fallbackResponse.text();
+                    throw new Error(`Bridge server error: ${fallbackResponse.statusText}. ${errorText}`);
+                }
+
+                const data = await fallbackResponse.json();
+                this.sessionId = data.sessionId;
+                return data;
+            }
+
+            const data = await response.json();
+            this.sessionId = data.sessionId;
+            return data;
+        } catch (error: unknown) {
+            console.error(`Failed to create session:`, error);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            throw new Error(`Failed to create session: ${errorMessage}`);
         }
-
-        const data = await response.json();
-        console.log('Session created successfully:', data);
-        return data;
     }
 
     async navigate(sessionId: string, url: string): Promise<{ status: string; title: string }> {
@@ -64,9 +83,7 @@ export class WebUIClient {
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to navigate: ${errorText}`);
-            throw new Error(`Failed to navigate: ${errorText}`);
+            throw new Error(`Failed to navigate: ${response.statusText}`);
         }
 
         return response.json();
@@ -81,9 +98,22 @@ export class WebUIClient {
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to run agent: ${errorText}`);
-            throw new Error(`Failed to run agent: ${errorText}`);
+            throw new Error(`Failed to run agent: ${response.statusText}`);
+        }
+
+        return response.json();
+    }
+
+    async handleIntent(intent: string, options: any = {}): Promise<any> {
+        console.log(`Handling intent "${intent}"`);
+        const response = await fetch(`${this.apiUrl}/api/agent`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ intent, options })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to handle intent: ${response.statusText}`);
         }
 
         return response.json();
@@ -96,9 +126,7 @@ export class WebUIClient {
         });
 
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to close session: ${errorText}`);
-            throw new Error(`Failed to close session: ${errorText}`);
+            throw new Error(`Failed to close session: ${response.statusText}`);
         }
 
         return response.json();

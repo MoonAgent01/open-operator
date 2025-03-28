@@ -1,14 +1,4 @@
-import { NextResponse } from "next/server";
-import { browserbase } from "../../lib/browserbase-mock";
-
-interface SessionOptions {
-  timezone?: string;
-  contextId?: string;
-  settings?: {
-    headless?: boolean;
-    timeout?: number;
-  };
-}
+import { NextRequest, NextResponse } from "next/server";
 
 // Helper function to validate session ID
 function validateSessionId(sessionId: string | undefined): NextResponse | null {
@@ -24,10 +14,13 @@ function validateSessionId(sessionId: string | undefined): NextResponse | null {
   return null;
 }
 
+// Bridge server URL
+const BRIDGE_SERVER_URL = 'http://localhost:7789';
+
 /**
  * Get session status
  */
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get('sessionId');
@@ -35,13 +28,31 @@ export async function GET(request: Request) {
     const sessionError = validateSessionId(sessionId || undefined);
     if (sessionError) return sessionError;
 
-    // For now just return success if session ID is provided
-    // In the future we could add actual session status checking
-    return NextResponse.json({
-      success: true,
-      status: 'active',
-      sessionId
-    });
+    try {
+      // Check session status via bridge server
+      const response = await fetch(`${BRIDGE_SERVER_URL}/health?sessionId=${sessionId}`);
+      if (!response.ok) {
+        throw new Error(`Bridge server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      return NextResponse.json({
+        success: data.success,
+        status: data.status || 'unknown',
+        sessionId
+      });
+    } catch (error: any) {
+      console.error("Error checking session with bridge server:", error);
+      
+      // Fall back to basic response if bridge server is not available
+      return NextResponse.json({
+        success: true,
+        status: 'unknown',
+        sessionId,
+        warning: 'Bridge server connection failed, status may be inaccurate'
+      });
+    }
   } catch (error: any) {
     console.error("Error checking session:", error);
     return NextResponse.json(
@@ -57,64 +68,77 @@ export async function GET(request: Request) {
 /**
  * Create a new browser session
  */
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const options: SessionOptions = {
+    const options = {
       timezone: body.timezone || 'UTC',
-      contextId: body.contextId,
-      settings: body.settings || {}
+      contextId: body.contextId || '',
+      settings: body.settings || {
+        browserSettings: {
+          headless: false,
+          useExistingBrowser: false,
+          keepBrowserOpen: true,
+          keepBrowserOpenBetweenTasks: true,
+          windowSize: { width: 1366, height: 768 },
+          showBrowser: true,
+          useOwnBrowser: false
+        }
+      }
     };
 
     console.log("Creating new session with options:", options);
     
     try {
-      // Create a new session with Browserbase
-      const session = await browserbase.createSession(options);
+      // Create session via bridge server
+      const response = await fetch(`${BRIDGE_SERVER_URL}/session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(options),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Bridge server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const sessionData = await response.json();
+      
+      if (!sessionData.success) {
+        throw new Error(sessionData.error || 'Unknown bridge server error');
+      }
       
       console.log("Session created:", {
-        id: session.id,
-        contextId: session.contextId,
-        url: session.url,
-        connectUrl: session.connectUrl
+        id: sessionData.sessionId,
+        contextId: sessionData.contextId,
+        url: sessionData.sessionUrl
       });
 
       return NextResponse.json({
         success: true,
-        sessionId: session.id,
-        sessionUrl: session.url,
-        contextId: session.contextId,
+        sessionId: sessionData.sessionId,
+        sessionUrl: sessionData.sessionUrl,
+        contextId: sessionData.contextId,
         settings: options.settings,
-        connectUrl: session.connectUrl,
-        debugUrl: session.debugUrl
+        connectUrl: sessionData.connectUrl || sessionData.wsUrl,
+        debugUrl: sessionData.debugUrl
       });
-    } catch (browserError: any) {
-      console.error("Browserbase session creation failed:", browserError);
+    } catch (error: any) {
+      console.error("Bridge server session creation failed:", error);
       
-      // Check for specific error types
-      if (browserError.message.includes('port')) {
+      if (error.message.includes('ECONNREFUSED') || error.message.includes('Failed to fetch')) {
         return NextResponse.json(
           {
             success: false,
-            error: 'Service connection error. Please ensure Web UI and Bridge Server are running.',
-            details: browserError.message
+            error: 'Service connection error. Please ensure Bridge Server is running.',
+            details: error.message
           },
           { status: 503 }
         );
       }
       
-      if (browserError.message.includes('bridge server')) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'Bridge server error. Please check if the service is running correctly.',
-            details: browserError.message
-          },
-          { status: 502 }
-        );
-      }
-      
-      throw browserError; // Re-throw for general error handling
+      throw error; // Re-throw for general error handling
     }
   } catch (error: any) {
     console.error("Error creating session:", error);
@@ -131,7 +155,7 @@ export async function POST(request: Request) {
 /**
  * End a browser session
  */
-export async function DELETE(request: Request) {
+export async function DELETE(request: NextRequest) {
   try {
     const body = await request.json();
     const sessionId = body.sessionId as string;
@@ -141,15 +165,42 @@ export async function DELETE(request: Request) {
 
     console.log("Ending session:", sessionId);
     
-    // End the session with Browserbase
-    await browserbase.endSession(sessionId);
-    
-    console.log("Session ended successfully");
+    try {
+      // End session via bridge server
+      const response = await fetch(`${BRIDGE_SERVER_URL}/session`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sessionId }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Bridge server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error(data.error || 'Unknown bridge server error');
+      }
+      
+      console.log("Session ended successfully");
 
-    return NextResponse.json({ 
-      success: true,
-      message: "Session ended successfully"
-    });
+      return NextResponse.json({ 
+        success: true,
+        message: "Session ended successfully"
+      });
+    } catch (error: any) {
+      console.error("Bridge server session deletion failed:", error);
+      
+      // Return success even if bridge server fails, as this is a clean-up operation
+      return NextResponse.json({ 
+        success: true,
+        message: "Session marked as ended (bridge server may have failed)",
+        warning: error.message
+      });
+    }
   } catch (error: any) {
     console.error("Error ending session:", error);
     return NextResponse.json(
