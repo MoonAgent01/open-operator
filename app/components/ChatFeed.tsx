@@ -89,18 +89,23 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
       initializationRef.current = true;
 
       if (initialMessage && !agentStateRef.current.sessionId) {
+        const useWebUIBrowser = typeof window !== 'undefined' && 
+          localStorage.getItem('useWebUIBrowser') === 'true';
         setIsLoading(true);
         try {
-          const sessionResponse = await fetch("/api/session", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-              contextId: contextId,
-            }),
-          });
+              const sessionResponse = await fetch("/api/session", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                  contextId: contextId,
+                  settings: {
+                    useWebUIBrowser: useWebUIBrowser
+                  }
+                }),
+              });
           const sessionData = await sessionResponse.json();
 
           if (!sessionData.success) {

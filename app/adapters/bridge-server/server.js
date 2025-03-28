@@ -132,21 +132,33 @@ app.post('/session', (req, res) => {
 function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
   const sessionId = `session-${Date.now()}`;
+  const useWebUIBrowser = req.body.settings?.useWebUIBrowser || false;
+  
   activeSessions.set(sessionId, { 
-    id: sessionId, 
+    id: sessionId,
     contextId: req.body.contextId || '',
-    createdAt: new Date()
+    createdAt: new Date(),
+    useWebUIBrowser
   });
+  
+  // Determine session URL based on browser mode
+  const sessionUrl = useWebUIBrowser 
+    ? `${WEBUI_URL}/browser/${sessionId}`
+    : `http://localhost:3000/browser/${sessionId}`;
   
   // Send response with session info
   const response = {
     success: true,
     sessionId,
     contextId: req.body.contextId || '',
-    sessionUrl: WEBUI_URL,
-    connectUrl: `ws://localhost:${WEBUI_PORT}/ws`,
-    wsUrl: `ws://localhost:${WEBUI_PORT}/ws`,
-    debugUrl: WEBUI_URL
+    sessionUrl,
+    connectUrl: useWebUIBrowser 
+      ? `ws://localhost:${WEBUI_PORT}/ws` 
+      : `ws://localhost:3000/ws`,
+    wsUrl: useWebUIBrowser 
+      ? `ws://localhost:${WEBUI_PORT}/ws` 
+      : `ws://localhost:3000/ws`,
+    debugUrl: useWebUIBrowser ? WEBUI_URL : 'http://localhost:3000'
   };
   
   console.log('[Session Creation] Response:', response);

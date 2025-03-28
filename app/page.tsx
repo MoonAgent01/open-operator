@@ -21,10 +21,17 @@ const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }
 export default function Home() {
   const [isChatVisible, setIsChatVisible] = useState(false);
   const [initialMessage, setInitialMessage] = useState("");
+  const [browserMode, setBrowserMode] = useState<'Native'|'Web UI'>('Native');
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+    const savedMode = localStorage.getItem('useWebUIBrowser') === 'true' ? 'Web UI' : 'Native';
+    setBrowserMode(savedMode);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Handle CMD+Enter to submit the form when chat is not visible
       if (!isChatVisible && (e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         const form = document.querySelector("form") as HTMLFormElement;
@@ -33,7 +40,6 @@ export default function Home() {
         }
       }
 
-      // Handle CMD+K to focus input when chat is not visible
       if (!isChatVisible && (e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         const input = document.querySelector(
@@ -44,7 +50,6 @@ export default function Home() {
         }
       }
 
-      // Handle ESC to close chat when visible
       if (isChatVisible && e.key === "Escape") {
         e.preventDefault();
         setIsChatVisible(false);
@@ -75,7 +80,6 @@ export default function Home() {
     <AnimatePresence mode="wait">
       {!isChatVisible ? (
         <div className="min-h-screen bg-gray-50 flex flex-col">
-          {/* Top Navigation */}
           <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-200">
             <div className="flex items-center gap-3">
               <Image
@@ -87,27 +91,42 @@ export default function Home() {
               />
               <span className="font-ppsupply text-gray-900">Open Operator</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-ppsupply text-gray-500">Browser:</span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={browserMode === 'Web UI'}
+                    onChange={(e) => {
+                      const mode = e.target.checked ? 'Web UI' : 'Native';
+                      localStorage.setItem('useWebUIBrowser', e.target.checked.toString());
+                      setBrowserMode(mode);
+                    }}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#FF3B00]"></div>
+                  <span className="ml-2 text-sm font-ppsupply text-gray-700">
+                    {isMounted ? browserMode : 'Loading...'}
+                  </span>
+                </label>
+              </div>
               <a
                 href="https://github.com/browserbase/open-operator"
                 target="_blank" 
                 rel="noopener noreferrer"
+                className="text-gray-500 hover:text-gray-700"
               >
-                <button className="h-fit flex items-center justify-center px-4 py-2 rounded-md bg-[#1b2128] hover:bg-[#1d232b] gap-1 text-sm font-medium text-white border border-pillSecondary transition-colors duration-200">
-                  <Image
-                    src="/github.svg"
-                    alt="GitHub"
-                    width={20}
-                    height={20}
-                    className="mr-2"
-                  />
-                  View GitHub
-                </button>
+                <Image
+                  src="/github.svg"
+                  alt="GitHub"
+                  width={20}
+                  height={20}
+                />
               </a>
             </div>
           </nav>
 
-          {/* Main Content */}
           <main className="flex-1 flex flex-col items-center justify-center p-6">
             <div className="w-full max-w-[640px] bg-white border border-gray-200 shadow-sm">
               <div className="w-full h-12 bg-white border-b border-gray-200 flex items-center px-4">
@@ -152,7 +171,8 @@ export default function Home() {
                       name="message"
                       type="text"
                       placeholder="What's the price of NVIDIA stock?"
-                      className="w-full px-4 py-3 pr-[100px] border border-gray-200 text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FF3B00] focus:border-transparent font-ppsupply"
+                      className="w-full px-4 py-3 pr-[100px] border border-gray-200 text-gray-9
+00 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FF3B00] focus:border-transparent font-ppsupply"
                     />
                     <AnimatedButton type="submit">Run</AnimatedButton>
                   </div>
@@ -180,7 +200,7 @@ export default function Home() {
                     onClick={() => startChat("What is Stephen Curry's PPG?")}
                     className="p-3 text-sm text-gray-600 border border-gray-200 hover:border-[#FF3B00] hover:text-[#FF3B00] transition-colors font-ppsupply text-left"
                   >
-                    What is Stephen Curry&apos;s PPG?
+                    What is Stephen Curry's PPG?
                   </button>
                   <button
                     onClick={() => startChat("How much is NVIDIA stock?")}
