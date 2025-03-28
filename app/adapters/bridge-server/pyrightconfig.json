@@ -1,0 +1,7 @@
+{
+  "venv": "python",
+  "venvPath": "C:\\Python311",
+  "extraPaths": [
+    "C:\\Python311\\Lib\\site-packages"
+  ]
+}

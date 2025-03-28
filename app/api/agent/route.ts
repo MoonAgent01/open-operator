@@ -1,328 +1,272 @@
 import { NextResponse } from 'next/server';
-import { openai } from "@ai-sdk/openai";
-import { CoreMessage, generateObject, UserContent } from "ai";
-import { z } from "zod";
-import { ObserveResult, Stagehand } from "@browserbasehq/stagehand";
+import { stagehand, handleIntent } from '../../lib/stagehand-mock';
+import { browserbase } from '../../lib/browserbase-mock';
+import { debuglog } from 'util';
 
-const LLMClient = openai("gpt-4o");
+const debug = debuglog('agent-route');
 
-type Step = {
-  text: string;
-  reasoning: string;
-  tool: "GOTO" | "ACT" | "EXTRACT" | "OBSERVE" | "CLOSE" | "WAIT" | "NAVBACK";
-  instruction: string;
-};
+interface ViewportSettings {
+  width: number;
+  height: number;
+}
 
-async function runStagehand({
-  sessionID,
-  method,
-  instruction,
-}: {
-  sessionID: string;
-  method: "GOTO" | "ACT" | "EXTRACT" | "CLOSE" | "SCREENSHOT" | "OBSERVE" | "WAIT" | "NAVBACK";
-  instruction?: string;
-}) {
-  const stagehand = new Stagehand({
-    browserbaseSessionID: sessionID,
-    env: "BROWSERBASE",
-    logger: () => {},
-  });
-  await stagehand.init();
+interface StealthSettings {
+  enabled?: boolean;
+  solveCaptchas?: boolean;
+  fingerprint?: {
+    browsers?: string[];
+    devices?: string[];
+    locales?: string[];
+    operatingSystems?: string[];
+  };
+}
 
-  const page = stagehand.page;
+interface SessionSettings {
+  viewport?: ViewportSettings;
+  stealth?: StealthSettings;
+  headless?: boolean;
+  timeout?: number;
+  metadata?: Record<string, any>;
+}
 
+interface Step {
+  tool: string;
+  args: Record<string, any>;
+  reason?: string;
+  metadata?: Record<string, any>;
+}
+
+// Helper function to validate session ID
+function validateSession(sessionId: string | undefined): NextResponse | null {
+  if (!sessionId) {
+    return NextResponse.json(
+      { 
+        success: false,
+        error: 'Missing sessionId in request body' 
+      },
+      { status: 400 }
+    );
+  }
+  return null;
+}
+
+// Helper function to validate goal
+function validateGoal(goal: string | undefined): NextResponse | null {
+  if (!goal) {
+    return NextResponse.json(
+      { 
+        success: false,
+        error: 'Missing goal in request body' 
+      },
+      { status: 400 }
+    );
+  }
+  return null;
+}
+
+// Helper function to validate step
+function validateStep(step: Step | undefined): NextResponse | null {
+  if (!step || !step.tool) {
+    return NextResponse.json(
+      { 
+        success: false,
+        error: 'Missing or invalid step in request body' 
+      },
+      { status: 400 }
+    );
+  }
+  return null;
+}
+
+// Helper function to check session status
+async function checkSessionStatus(sessionId: string): Promise<boolean> {
   try {
-    switch (method) {
-      case "GOTO":
-        await page.goto(instruction!, {
-          waitUntil: "commit",
-          timeout: 60000,
-        });
-        break;
-
-      case "ACT":
-        await page.act(instruction!);
-        break;
-
-      case "EXTRACT": {
-        const { extraction } = await page.extract(instruction!);
-        return extraction;
-      }
-
-      case "OBSERVE":
-        return await page.observe({
-          instruction,
-          useAccessibilityTree: true,
-        });
-
-      case "CLOSE":
-        await stagehand.close();
-        break;
-
-      case "SCREENSHOT": {
-        const cdpSession = await page.context().newCDPSession(page);
-        const { data } = await cdpSession.send("Page.captureScreenshot");
-        return data;
-      }
-
-      case "WAIT":
-        await new Promise((resolve) =>
-          setTimeout(resolve, Number(instruction))
-        );
-        break;
-
-      case "NAVBACK":
-        await page.goBack();
-        break;
-    }
-  } catch (error) {
-    await stagehand.close();
-    throw error;
+    return await browserbase.checkSession(sessionId);
+  } catch {
+    return false;
   }
-}
-
-async function sendPrompt({
-  goal,
-  sessionID,
-  previousSteps = [],
-  previousExtraction,
-}: {
-  goal: string;
-  sessionID: string;
-  previousSteps?: Step[];
-  previousExtraction?: string | ObserveResult[];
-}) {
-  let currentUrl = "";
-
-  try {
-    const stagehand = new Stagehand({
-      browserbaseSessionID: sessionID,
-      env: "BROWSERBASE"
-    });
-    await stagehand.init();
-    currentUrl = await stagehand.page.url();
-    await stagehand.close();
-  } catch (error) {
-    console.error('Error getting page info:', error);
-  }
-
-  const content: UserContent = [
-    {
-      type: "text",
-      text: `Consider the following screenshot of a web page${currentUrl ? ` (URL: ${currentUrl})` : ''}, with the goal being "${goal}".
-${previousSteps.length > 0
-    ? `Previous steps taken:
-${previousSteps
-  .map(
-    (step, index) => `
-Step ${index + 1}:
-- Action: ${step.text}
-- Reasoning: ${step.reasoning}
-- Tool Used: ${step.tool}
-- Instruction: ${step.instruction}
-`
-  )
-  .join("\n")}`
-    : ""
-}
-Determine the immediate next step to take to achieve the goal. 
-
-Important guidelines:
-1. Break down complex actions into individual atomic steps
-2. For ACT commands, use only one action at a time, such as:
-   - Single click on a specific element
-   - Type into a single input field
-   - Select a single option
-3. Avoid combining multiple actions in one instruction
-4. If multiple actions are needed, they should be separate steps
-
-If the goal has been achieved, return "close".`,
-    },
-  ];
-
-  // Add screenshot if navigated to a page previously
-  if (previousSteps.length > 0 && previousSteps.some((step) => step.tool === "GOTO")) {
-    content.push({
-      type: "image",
-      image: (await runStagehand({
-        sessionID,
-        method: "SCREENSHOT",
-      })) as string,
-    });
-  }
-
-  if (previousExtraction) {
-    content.push({
-      type: "text",
-      text: `The result of the previous ${
-        Array.isArray(previousExtraction) ? "observation" : "extraction"
-      } is: ${previousExtraction}.`,
-    });
-  }
-
-  const message: CoreMessage = {
-    role: "user",
-    content,
-  };
-
-  const result = await generateObject({
-    model: LLMClient,
-    schema: z.object({
-      text: z.string(),
-      reasoning: z.string(),
-      tool: z.enum([
-        "GOTO",
-        "ACT",
-        "EXTRACT",
-        "OBSERVE",
-        "CLOSE",
-        "WAIT",
-        "NAVBACK",
-      ]),
-      instruction: z.string(),
-    }),
-    messages: [message],
-  });
-
-  return {
-    result: result.object,
-    previousSteps: [...previousSteps, result.object],
-  };
-}
-
-async function selectStartingUrl(goal: string) {
-  const message: CoreMessage = {
-    role: "user",
-    content: [{
-      type: "text",
-      text: `Given the goal: "${goal}", determine the best URL to start from.
-Choose from:
-1. A relevant search engine (Google, Bing, etc.)
-2. A direct URL if you're confident about the target website
-3. Any other appropriate starting point
-
-Return a URL that would be most effective for achieving this goal.`
-    }]
-  };
-
-  const result = await generateObject({
-    model: LLMClient,
-    schema: z.object({
-      url: z.string().url(),
-      reasoning: z.string()
-    }),
-    messages: [message]
-  });
-
-  return result.object;
 }
 
 export async function GET() {
-  return NextResponse.json({ message: 'Agent API endpoint ready' });
+  return NextResponse.json({ 
+    success: true,
+    message: 'Agent API endpoint ready',
+    version: '1.0.0',
+    supportedTools: [
+      'NAVIGATE',
+      'CLICK',
+      'TYPE',
+      'SELECT',
+      'SCROLL',
+      'WAIT',
+      'EXTRACT',
+      'CLOSE'
+    ]
+  });
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { goal, sessionId, previousSteps = [], action } = body;
+    const { goal, sessionId, previousSteps = [], action, settings = {} } = body;
 
-    if (!sessionId) {
-      return NextResponse.json(
-        { error: 'Missing sessionId in request body' },
-        { status: 400 }
-      );
+    debug('Processing request:', { action, sessionId, goal });
+    
+    // Validate session for all actions except START
+    if (action !== 'START') {
+      const sessionError = validateSession(sessionId);
+      if (sessionError) return sessionError;
+
+      // Check if session is still active
+      const isActive = await checkSessionStatus(sessionId);
+      if (!isActive) {
+        return NextResponse.json(
+          { 
+            success: false,
+            error: 'Session is no longer active' 
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Handle different action types
     switch (action) {
       case 'START': {
-        if (!goal) {
+        const goalError = validateGoal(goal);
+        if (goalError) return goalError;
+
+        debug('Starting new goal:', goal);
+        
+        try {
+          // Set metadata for the goal if provided
+          if (settings.metadata) {
+            stagehand.setGoalMetadata(settings.metadata);
+          }
+
+          // Create a new session with enhanced settings
+          const session = await browserbase.createSession({
+            contextId: goal.substring(0, 32), // Use truncated goal as context ID
+            settings: {
+              viewport: settings.viewport,
+              stealth: {
+                enabled: true,
+                solveCaptchas: true,
+                fingerprint: settings.stealth?.fingerprint
+              },
+              headless: settings.headless ?? false,
+              timeout: settings.timeout || 30000,
+              metadata: settings.metadata
+            }
+          });
+
+          // Start processing the intent
+          const firstStep = await handleIntent(goal, stagehand);
+          
+          debug('Session created and first step generated:', {
+            sessionId: session.id,
+            step: firstStep
+          });
+
+          return NextResponse.json({ 
+            success: true,
+            sessionId: session.id,
+            result: firstStep,
+            steps: [firstStep],
+            done: false,
+            debugUrl: session.debugUrl
+          });
+        } catch (error: any) {
+          console.error('Error starting session:', error);
           return NextResponse.json(
-            { error: 'Missing goal in request body' },
-            { status: 400 }
+            { 
+              success: false,
+              error: `Failed to start session: ${error.message}` 
+            },
+            { status: 500 }
           );
         }
-
-        // Handle first step with URL selection
-        const { url, reasoning } = await selectStartingUrl(goal);
-        const firstStep = {
-          text: `Navigating to ${url}`,
-          reasoning,
-          tool: "GOTO" as const,
-          instruction: url
-        };
-        
-        await runStagehand({
-          sessionID: sessionId,
-          method: "GOTO",
-          instruction: url
-        });
-
-        return NextResponse.json({ 
-          success: true,
-          result: firstStep,
-          steps: [firstStep],
-          done: false
-        });
       }
 
       case 'GET_NEXT_STEP': {
-        if (!goal) {
+        const goalError = validateGoal(goal);
+        if (goalError) return goalError;
+
+        debug('Getting next step:', { goal, previousSteps });
+
+        try {
+          // Get next action from Stagehand
+          const nextStep = await stagehand.getNextStep(goal, previousSteps);
+          const allSteps = stagehand.getHistory();
+          
+          debug('Next step generated:', nextStep);
+          
+          return NextResponse.json({
+            success: true,
+            result: nextStep,
+            steps: allSteps,
+            done: nextStep.tool === "CLOSE"
+          });
+        } catch (error: any) {
+          console.error('Error getting next step:', error);
           return NextResponse.json(
-            { error: 'Missing goal in request body' },
-            { status: 400 }
+            { 
+              success: false,
+              error: `Failed to get next step: ${error.message}` 
+            },
+            { status: 500 }
           );
         }
-
-        // Get the next step from the LLM
-        const { result, previousSteps: newPreviousSteps } = await sendPrompt({
-          goal,
-          sessionID: sessionId,
-          previousSteps,
-        });
-
-        return NextResponse.json({
-          success: true,
-          result,
-          steps: newPreviousSteps,
-          done: result.tool === "CLOSE"
-        });
       }
 
       case 'EXECUTE_STEP': {
         const { step } = body;
-        if (!step) {
+        const stepError = validateStep(step);
+        if (stepError) return stepError;
+
+        debug('Executing step:', { sessionId, step });
+
+        try {
+          // Execute the step using Browserbase
+          const extraction = await browserbase.executeStep(sessionId, step);
+
+          debug('Step execution result:', extraction);
+
+          return NextResponse.json({
+            success: true,
+            extraction,
+            done: step.tool === "CLOSE"
+          });
+        } catch (error: any) {
+          console.error('Error executing step:', error);
           return NextResponse.json(
-            { error: 'Missing step in request body' },
-            { status: 400 }
+            { 
+              success: false,
+              error: `Failed to execute step: ${error.message}` 
+            },
+            { status: 500 }
           );
         }
-
-        // Execute the step using Stagehand
-        const extraction = await runStagehand({
-          sessionID: sessionId,
-          method: step.tool,
-          instruction: step.instruction,
-        });
-
-        return NextResponse.json({
-          success: true,
-          extraction,
-          done: step.tool === "CLOSE"
-        });
       }
 
       default:
+        console.error(`Invalid action type: ${action}`);
         return NextResponse.json(
-          { error: 'Invalid action type' },
+          { 
+            success: false,
+            error: `Invalid action type. Must be one of: START, GET_NEXT_STEP, EXECUTE_STEP` 
+          },
           { status: 400 }
         );
     }
-  } catch (error) {
-    console.error('Error in agent endpoint:', error);
+  } catch (error: any) {
+    console.error('Unhandled error in agent endpoint:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to process request' },
+      { 
+        success: false,
+        error: `Internal server error: ${error.message}` 
+      },
       { status: 500 }
     );
   }
-} 
+}
