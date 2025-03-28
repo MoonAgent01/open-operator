@@ -10,17 +10,22 @@ const PORT = process.env.PORT || 7789;
 // WebUI integration constants
 const WEBUI_PORT = 7788;
 const WEBUI_URL = `http://localhost:${WEBUI_PORT}`;
+const WEBUI_API_URL = `${WEBUI_URL}`; // Gradio uses root endpoints
 let webUIAvailable = false;
 
 // Check if Web UI is available
 async function checkWebUIAvailability() {
   try {
-    const response = await fetch(`${WEBUI_URL}/`, {
-      timeout: 2000
-    });
-    webUIAvailable = response.ok;
+    // Check both root and API endpoints
+    const [rootResponse, apiResponse] = await Promise.all([
+      fetch(`${WEBUI_URL}/`, { timeout: 2000 }),
+      fetch(`${WEBUI_URL}/api/health`, { timeout: 2000 })
+    ]);
+    webUIAvailable = rootResponse.ok || apiResponse.ok;
+    console.log(`[WebUI Check] Status: ${webUIAvailable ? 'Available' : 'Unavailable'}`);
   } catch (error) {
     webUIAvailable = false;
+    console.error('[WebUI Check] Error:', error.message);
   }
   return webUIAvailable;
 }
@@ -200,7 +205,7 @@ app.post('/intent', async (req, res) => {
     
     if (session?.useWebUIBrowser) {
       try {
-        const webUiResponse = await fetch(`${WEBUI_URL}/api/agent/run`, {
+        const webUiResponse = await fetch(`${WEBUI_API_URL}/agent/run`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -343,29 +348,53 @@ app.post('/execute', async (req, res) => {
     if (session?.useWebUIBrowser && await checkWebUIAvailability()) {
       try {
         // Try Web UI execution if available
-        const webUiResponse = await fetch(`${WEBUI_URL}/api/browser/execute`, {
+        // Map our action types to Web UI's expected format
+        let task = step.text;
+        if (step.tool === 'NAVIGATE') {
+          task = `Navigate to ${step.args.url}`;
+        } else if (step.tool === 'CLICK') {
+          task = `Click on ${step.args.selector || step.args.text}`;
+        } else if (step.tool === 'TYPE') {
+          task = `Type "${step.args.text}" in field`;
+        }
+
+        // Format request for Gradio API
+        const formData = new FormData();
+        formData.append('data', JSON.stringify([{
+          agent_type: "org",
+          llm_provider: "openai",
+          llm_model_name: "gpt-4o",
+          llm_temperature: 0.7,
+          use_own_browser: false,
+          keep_browser_open: true,
+          headless: false,
+          window_w: 1280,
+          window_h: 720,
+          task: task,
+          max_steps: 1,
+          use_vision: false,
+          max_actions_per_step: 1,
+          tool_calling_method: "auto",
+          chrome_cdp: "",
+          session_id: sessionId
+        }]));
+
+        const webUiResponse = await fetch(`${WEBUI_API_URL}/api/gradio/run_browser_agent/run`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: sessionId,
-            command: step.tool.toLowerCase(),
-            parameters: step.args,
-            metadata: {
-              text: step.text,
-              reasoning: step.reasoning,
-              instruction: step.instruction
-            }
-          })
+          body: formData
         });
         
         if (webUiResponse.ok) {
-          const data = await webUiResponse.json();
-          if (data.success) {
-            console.log('[Execute] Successfully executed via Web UI');
+          const result = await webUiResponse.json();
+          const responseData = result.data && result.data[0];
+          if (responseData && responseData.success) {
+            console.log('[Execute] Web UI execution result:', responseData);
             return res.json({
               success: true,
               result: {
-                ...data.result,
+                url: responseData.result?.url || 'https://example.com',
+                content: responseData.result?.content || '<html><body></body></html>',
+                extraction: responseData.result?.extraction || {},
                 text: step.text,
                 reasoning: step.reasoning,
                 instruction: step.instruction
@@ -494,7 +523,7 @@ app.delete('/session', async (req, res) => {
     if (session?.useWebUIBrowser && await checkWebUIAvailability()) {
       try {
         // Notify Web UI to clean up session if available
-        await fetch(`${WEBUI_URL}/api/agent/close`, {
+        await fetch(`${WEBUI_API_URL}/agent/close`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: sessionId })
