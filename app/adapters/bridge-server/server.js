@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 7789;
 // WebUI integration constants
 const WEBUI_PORT = 7788;
 const WEBUI_URL = `http://localhost:${WEBUI_PORT}`;
-const WEBUI_API_URL = `${WEBUI_URL}`; // Gradio uses root endpoints
+const WEBUI_API_URL = `${WEBUI_URL}/api`; // Web UI uses /api prefix
 let webUIAvailable = false;
 
 // Check if Web UI is available
@@ -235,7 +235,7 @@ app.post('/intent', async (req, res) => {
     
     if (session?.useWebUIBrowser) {
       try {
-        const webUiResponse = await fetch(`${WEBUI_API_URL}/agent/run`, {
+              const webUiResponse = await fetch(`${WEBUI_URL}/run/predict`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -401,32 +401,42 @@ app.post('/execute', async (req, res) => {
               }
 
               const requestBody = {
-                task: task,
-                config: {
-                  agent_type: "org",
-                  llm_provider: "openai",
-                  llm_model_name: "gpt-4o",
-                  llm_temperature: 0.7,
-                  use_own_browser: false,
-                  keep_browser_open: true,
-                  headless: false,
-                  window_w: 1280,
-                  window_h: 720,
-                  max_steps: 1,
-                  use_vision: false,
-                  max_actions_per_step: 1,
-                  tool_calling_method: "auto",
-                  chrome_cdp: "",
-                  session_id: sessionId
-                }
+                data: [
+                  "org", // agent_type
+                  "openai", // llm_provider  
+                  "gpt-4o", // llm_model_name
+                  0, // llm_num_ctx
+                  0.7, // llm_temperature
+                  "", // llm_base_url
+                  "", // llm_api_key
+                  false, // use_own_browser
+                  true, // keep_browser_open  
+                  false, // headless
+                  false, // disable_security
+                  1280, // window_w
+                  720, // window_h
+                  "", // save_recording_path
+                  "", // save_agent_history_path
+                  "", // save_trace_path
+                  false, // enable_recording
+                  task, // task
+                  "", // add_infos
+                  1, // max_steps
+                  false, // use_vision
+                  1, // max_actions_per_step
+                  "auto", // tool_calling_method
+                  "", // chrome_cdp
+                  128000 // max_input_tokens
+                ],
+                fn_index: 1 // Corresponds to the agent run function
               };
 
               console.log('[Execute] Sending to WebUI:', {
-                url: `${WEBUI_API_URL}/agent/run`,
+                url: `${WEBUI_API_URL}/agent`,
                 body: requestBody
               });
 
-              const webUiResponse = await fetch(`${WEBUI_API_URL}/agent/run`, {
+              const webUiResponse = await fetch(`${WEBUI_URL}/run/predict`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(requestBody)
