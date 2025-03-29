@@ -237,25 +237,41 @@ app.post('/intent', async (req, res) => {
       // If using WebUI browser, delegate intent processing (if applicable)
       // This part might need adjustment based on how WebUI handles intent vs execution
       try {
-        const webUiResponse = await fetch(`${WEBUI_URL}/run/predict`, { // Using /run/predict
+        const gradioRequest = {
+          agent_type: "org",               // Using org agent type
+          llm_provider: "openai",          // LLM provider
+          llm_model_name: "gpt-4o",        // Model name
+          llm_num_ctx: 4096,               // Context window size
+          llm_temperature: 0.7,            // Temperature
+          llm_base_url: "",                // Base URL
+          llm_api_key: "",                 // API key
+          use_own_browser: false,          // Use own browser
+          keep_browser_open: true,         // Keep browser open
+          headless: false,                 // Headless mode
+          disable_security: false,         // Disable security
+          window_w: 1280,                  // Window width
+          window_h: 720,                   // Window height
+          save_recording_path: "",         // Recording path
+          save_agent_history_path: "",     // Agent history path
+          save_trace_path: "",             // Trace path
+          enable_recording: false,         // Enable recording
+          task: goal,                      // Task description from goal
+          add_infos: "",                   // Additional info (empty)
+          max_steps: 1,                    // Max steps
+          use_vision: false,               // Use vision
+          max_actions_per_step: 1,         // Max actions per step
+          tool_calling_method: "auto"      // Tool calling method
+        };
+        
+        console.log('[Intent] Sending to Gradio API:', {
+          url: `${WEBUI_URL}/run_with_stream`,
+          body: gradioRequest
+        });
+
+        const webUiResponse = await fetch(`${WEBUI_URL}/run_with_stream`, { // Using correct endpoint
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            // Assuming WebUI might have an intent processing endpoint or handles it within run
-            session_id: sessionId,
-            task: goal, // Send the goal as the task
-            history: previousSteps.map(step => ({
-              action: step.tool,
-              args: step.args,
-              result: step.text
-            })),
-            context: {
-              is_first_step: context.isFirstStep || false
-            },
-            // Include necessary Gradio structure if calling a specific function
-            fn_index: 0, // Example: Assuming intent processing is at index 0
-            // api_name: "/process_intent" // Example: If there's a specific API name
-          })
+          body: JSON.stringify(gradioRequest)
         });
 
         if (webUiResponse.ok) {
@@ -405,97 +421,32 @@ app.post('/execute', async (req, res) => {
               task = step.text; // Use the step text as a fallback task description
           }
 
-          // Correct Gradio API format per webui.py, including ALL parameters
-          const gradioRequest = {
-            data: [
-              "org",       // agent_type
-              "openai",    // llm_provider
-              "gpt-4o",    // llm_model_name
-              4096,        // llm_num_ctx (Added default)
-              0.7,         // llm_temperature
-              "",          // llm_base_url
-              "",          // llm_api_key
-              false,       // use_own_browser
-              true,        // keep_browser_open
-              false,       // headless
-              false,       // disable_security
-              1280,        // window_w
-              720,         // window_h
-              "",          // save_recording_path
-              "",          // save_agent_history_path
-              "",          // save_trace_path
-              false,       // enable_recording
-              task,        // task
-              "",          // add_infos
-              1,           // max_steps
-              false,       // use_vision
-              1,           // max_actions_per_step
-              "auto",      // tool_calling_method
-              "",          // chrome_cdp
-              128000       // max_input_tokens (Added default)
-            ],
-            fn_index: 0 // Assuming fn_index 0 corresponds to run_with_stream
-            // Removed api_name based on analysis
-          };
-
-          console.log('[Execute] Sending to Gradio API:', {
-            url: `${WEBUI_URL}/api/v1/predict`, // Using standard Gradio API v1 endpoint
-            body: gradioRequest
+          // Use gradio_bridge.py to execute the step
+          const result = await runPythonBridge('execute_step', { 
+            step: {
+              tool: step.tool,
+              args: step.args,
+              text: step.text
+            },
+            task
           });
 
-          const webUiResponse = await fetch(`${WEBUI_URL}/api/v1/predict`, { // Using standard Gradio API v1 endpoint
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(gradioRequest)
-          });
+          console.log('[Execute] WebUI bridge response:', result);
 
-          console.log('[Execute] WebUI response status:', webUiResponse.status);
-          const result = await webUiResponse.json();
-          console.log('[Execute] WebUI raw response:', result);
-
-          if (!webUiResponse.ok) {
-            // More specific error logging
-            const errorDetail = result?.detail || webUiResponse.statusText;
-            throw new Error(`Gradio API error: ${webUiResponse.status} ${errorDetail}`);
+          if (!result || result.error) {
+            throw new Error(result?.error || 'Unknown error executing step');
           }
 
-          // Adapt response parsing based on Gradio's actual structure
-          if (!result.data || result.data.length < 1) {
-            console.error('[Execute] Invalid response format from Gradio API:', result);
-            throw new Error('Invalid response format from Gradio API');
-          }
-
-          // Assuming the actual result is nested within the first element of the 'data' array
-          // This structure might need adjustment based on actual Gradio responses
-          const responsePayload = result.data[0]; // Adjust if structure differs
-
-          // Check for success within the payload if applicable
-          // Note: Gradio responses might not have a 'success' field; success is often implied by HTTP 200
-          // We might need to parse the specific elements returned by run_with_stream
-          console.log('[Execute] Web UI execution payload:', responsePayload);
-
-          // Map the Gradio response elements to the expected StepResult structure
-          // Indices based on the 'outputs' of run_with_stream in webui.py
-          // [browser_view, final_result, errors, model_actions, model_thoughts, recording_gif, trace, history_file, stop_button, run_button]
-          const finalResultText = responsePayload?.[1] || step.text; // Index 1 for final_result
-          const errorText = responsePayload?.[2]; // Index 2 for errors
-
-          if (errorText) {
-             console.error('[Execute] Error reported by WebUI:', errorText);
-             // Decide if this should be treated as a failure
-             // For now, let's pass it through but log it
-          }
-
+          // Process the response from gradio_bridge.py
           return res.json({
-            success: true, // Assuming HTTP 200 means success for Gradio
+            success: true,
             result: {
-              // Map fields based on expected StepResult structure
-              url: step.args.url || 'https://example.com', // URL might not be directly returned, use input or default
-              content: responsePayload?.[0] || '<html><body>Content N/A</body></html>', // Index 0 for browser_view (HTML)
-              extraction: {}, // Extraction might need specific handling if returned
-              text: finalResultText,
-              reasoning: responsePayload?.[4] || step.reasoning, // Index 4 for model_thoughts
-              instruction: step.instruction // Instruction might not be returned
+              url: step.args.url || 'https://example.com',
+              content: result.browserView || '<html><body>Content N/A</body></html>',
+              extraction: result.extraction || {},
+              text: result.finalResult || step.text,
+              reasoning: result.thoughts || step.reasoning, 
+              instruction: step.instruction
             }
           });
 

@@ -79,6 +79,55 @@ def run_agent(args):
             "error": str(e)
         }
 
+def execute_step(args):
+    """Execute a browser step using gradio_bridge.py and the Gradio client."""
+    try:
+        step = args.get("step", {})
+        task = args.get("task", "")
+        
+        # Import subprocess to run gradio_bridge.py
+        import subprocess
+        import os
+        
+        # Path to gradio_bridge.py
+        gradio_bridge_path = os.path.join(os.path.dirname(__file__), "gradio_bridge.py")
+        
+        # Run gradio_bridge.py with 'execute_step' command
+        command = [
+            sys.executable,  # Use the same Python interpreter
+            gradio_bridge_path,
+            "execute_step",
+            json.dumps({
+                "tool": step.get("tool", ""),
+                "args": step.get("args", {}),
+                "text": step.get("text", ""),
+                "task": task
+            })
+        ]
+        
+        # Execute the command
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        # Parse the output
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {
+                "success": False,
+                "error": f"Failed to parse gradio_bridge.py output: {result.stdout}",
+                "stderr": result.stderr
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
 def main():
     parser = argparse.ArgumentParser(description="Python Bridge for Open Operator")
     parser.add_argument("command", help="Command to execute")
@@ -93,6 +142,8 @@ def main():
         result = health_check()
     elif command == "run_agent":
         result = run_agent(arguments)
+    elif command == "execute_step":
+        result = execute_step(arguments)
     else:
         result = {
             "success": False,

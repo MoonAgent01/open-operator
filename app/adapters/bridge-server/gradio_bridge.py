@@ -492,9 +492,10 @@ def main():
         elif action == "execute_step":
             args = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
             
-            step = args.get('step', {})
-            tool = step.get('tool', 'THINK')
-            step_args = step.get('args', {})
+            tool = args.get('tool', 'THINK')
+            step_args = args.get('args', {})
+            text = args.get('text', '')
+            task = args.get('task', '')
             
             if not api_key:
                 print(json.dumps({
@@ -503,13 +504,10 @@ def main():
                 }))
                 return
             
-            # Create task description
-            task = f"{tool.lower()} {json.dumps(step_args)}"
-            
             try:
                 client = Client(webui_url, verbose=False)
                 
-                # Call the run_with_stream endpoint with the task
+                # Call the run_with_stream endpoint
                 result = client.predict(
                     "custom",                      # agent_type
                     llm_provider,                  # llm_provider
@@ -546,6 +544,7 @@ def main():
                 print(json.dumps({
                     "success": True,
                     "browserView": browser_view,
+                    "finalResult": final_result,
                     "extraction": final_result,
                     "errors": errors,
                     "actions": model_actions,
@@ -553,6 +552,7 @@ def main():
                 }))
                 
             except Exception as e:
+                log(f"Error executing step with Gradio client: {e}")
                 print(json.dumps({
                     "success": False,
                     "error": str(e)
