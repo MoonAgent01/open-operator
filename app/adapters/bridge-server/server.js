@@ -16,18 +16,48 @@ let webUIAvailable = false;
 // Check if Web UI is available
 async function checkWebUIAvailability() {
   try {
-    // Check both root and API endpoints
-    const [rootResponse, apiResponse] = await Promise.all([
-      fetch(`${WEBUI_URL}/`, { timeout: 2000 }),
-      fetch(`${WEBUI_URL}/api/health`, { timeout: 2000 })
-    ]);
-    webUIAvailable = rootResponse.ok || apiResponse.ok;
-    console.log(`[WebUI Check] Status: ${webUIAvailable ? 'Available' : 'Unavailable'}`);
+    console.log(`[WebUI Check] Testing WebUI at ${WEBUI_URL}`);
+    const apiResponse = await fetch(`${WEBUI_URL}/`, {
+      timeout: 2000,
+      headers: { 'Accept': 'application/json, text/html' }
+    });
+    
+    // First check if we got a successful response at all
+    if (!apiResponse.ok) {
+      console.log(`[WebUI Check] Status check failed: ${apiResponse.status} ${apiResponse.statusText}`);
+      return false;
+    }
+    
+    // Try to parse as JSON, but don't fail if it's not JSON
+    try {
+      const contentType = apiResponse.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const healthData = await apiResponse.json();
+        console.log('[WebUI Check] Health response JSON:', healthData);
+        // If it has a status field, use it, otherwise consider it available
+        const isAvailable = healthData.status ? healthData.status === 'ok' : true;
+        console.log(`[WebUI Check] WebUI available (JSON): ${isAvailable}`);
+        return isAvailable;
+      } else {
+        // It's HTML or some other format, but the server is responding
+        console.log('[WebUI Check] WebUI responded with non-JSON content type:', contentType);
+        console.log('[WebUI Check] Considering WebUI available since it responded successfully');
+        return true;
+      }
+    } catch (jsonError) {
+      // Even if JSON parsing fails, the server is still responsive
+      console.log('[WebUI Check] Failed to parse response as JSON, but server is responding');
+      console.log(`[WebUI Check] WebUI considered available`);
+      return true;
+    }
   } catch (error) {
-    webUIAvailable = false;
     console.error('[WebUI Check] Error:', error.message);
+    console.error('Full error:', {
+      message: error.message,
+      stack: error.stack
+    });
+    return false;
   }
-  return webUIAvailable;
 }
 
 // Middleware
@@ -345,66 +375,93 @@ app.post('/execute', async (req, res) => {
     
     const session = activeSessions.get(sessionId);
     
-    if (session?.useWebUIBrowser && await checkWebUIAvailability()) {
-      try {
-        // Try Web UI execution if available
-        // Map our action types to Web UI's expected format
-        let task = step.text;
-        if (step.tool === 'NAVIGATE') {
-          task = `Navigate to ${step.args.url}`;
-        } else if (step.tool === 'CLICK') {
-          task = `Click on ${step.args.selector || step.args.text}`;
-        } else if (step.tool === 'TYPE') {
-          task = `Type "${step.args.text}" in field`;
-        }
-
-        // Format request for Gradio API
-        const formData = new FormData();
-        formData.append('data', JSON.stringify([{
-          agent_type: "org",
-          llm_provider: "openai",
-          llm_model_name: "gpt-4o",
-          llm_temperature: 0.7,
-          use_own_browser: false,
-          keep_browser_open: true,
-          headless: false,
-          window_w: 1280,
-          window_h: 720,
-          task: task,
-          max_steps: 1,
-          use_vision: false,
-          max_actions_per_step: 1,
-          tool_calling_method: "auto",
-          chrome_cdp: "",
-          session_id: sessionId
-        }]));
-
-        const webUiResponse = await fetch(`${WEBUI_API_URL}/api/gradio/run_browser_agent/run`, {
-          method: 'POST',
-          body: formData
-        });
-        
-        if (webUiResponse.ok) {
-          const result = await webUiResponse.json();
-          const responseData = result.data && result.data[0];
-          if (responseData && responseData.success) {
-            console.log('[Execute] Web UI execution result:', responseData);
-            return res.json({
-              success: true,
-              result: {
-                url: responseData.result?.url || 'https://example.com',
-                content: responseData.result?.content || '<html><body></body></html>',
-                extraction: responseData.result?.extraction || {},
-                text: step.text,
-                reasoning: step.reasoning,
-                instruction: step.instruction
+        if (session?.useWebUIBrowser) {
+          const webUIAvailable = await checkWebUIAvailability();
+          console.log(`[Execute] WebUI available: ${webUIAvailable}, useWebUIBrowser: ${session.useWebUIBrowser}`);
+          
+          if (webUIAvailable) {
+            try {
+              // Map action to Web UI task format
+              let task;
+              switch(step.tool) {
+                case 'NAVIGATE':
+                  task = `Navigate to ${step.args.url}`;
+                  break;
+                case 'CLICK':
+                  task = `Click on ${step.args.selector || step.args.text}`;
+                  break;
+                case 'TYPE':
+                  task = `Type "${step.args.text}" in field`;
+                  break;
+                case 'EXTRACT':
+                  task = `Extract content from ${step.args.selector || 'page'}`;
+                  break;
+                default:
+                  task = step.text;
               }
-            });
+
+              const requestBody = {
+                task: task,
+                config: {
+                  agent_type: "org",
+                  llm_provider: "openai",
+                  llm_model_name: "gpt-4o",
+                  llm_temperature: 0.7,
+                  use_own_browser: false,
+                  keep_browser_open: true,
+                  headless: false,
+                  window_w: 1280,
+                  window_h: 720,
+                  max_steps: 1,
+                  use_vision: false,
+                  max_actions_per_step: 1,
+                  tool_calling_method: "auto",
+                  chrome_cdp: "",
+                  session_id: sessionId
+                }
+              };
+
+              console.log('[Execute] Sending to WebUI:', {
+                url: `${WEBUI_API_URL}/agent/run`,
+                body: requestBody
+              });
+
+              const webUiResponse = await fetch(`${WEBUI_API_URL}/agent/run`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+              });
+              
+              console.log('[Execute] WebUI response status:', webUiResponse.status);
+              const result = await webUiResponse.json();
+              console.log('[Execute] WebUI raw response:', result);
+
+              if (webUiResponse.ok) {
+                const responseData = result.data?.[0] || result;
+                if (responseData?.success) {
+                  console.log('[Execute] Web UI execution success:', responseData);
+                  return res.json({
+                    success: true,
+                    result: {
+                      url: responseData.result?.url || step.args.url || 'https://example.com',
+                      content: responseData.result?.content || '<html><body></body></html>',
+                      extraction: responseData.result?.extraction || {},
+                      text: responseData.result?.text || step.text,
+                      reasoning: responseData.result?.reasoning || step.reasoning,
+                      instruction: responseData.result?.instruction || step.instruction
+                    }
+                  });
+                }
+              }
+              console.error('[Execute] WebUI response not successful:', result);
+            } catch (error) {
+              console.error('[Execute] WebUI communication failed:', error);
+              console.error('Full error:', {
+                message: error.message,
+                stack: error.stack
+              });
+            }
           }
-        }
-      } catch (error) {
-        console.error('[Execute] WebUI communication failed, falling back to mock:', error);
-      }
     }
     
     // Fallback to mock if Web UI not selected or failed
