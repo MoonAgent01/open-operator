@@ -3,6 +3,7 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const path = require('path');
 const bodyParser = require('body-parser');
+const sessionManager = require('./session-manager');
 
 const app = express();
 const PORT = process.env.PORT || 7789;
@@ -63,9 +64,6 @@ async function checkWebUIAvailability() {
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
-
-// Store active sessions
-const activeSessions = new Map();
 
 // Helper to run Python scripts
 async function runPythonBridge(command, args = {}) {
@@ -150,7 +148,9 @@ app.get('/', (req, res) => {
 app.get('/health', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
-    if (sessionId && !activeSessions.has(sessionId)) {
+    const session = sessionId ? sessionManager.getSession(sessionId) : null;
+    
+    if (sessionId && !session) {
       return res.status(404).json({
         success: false,
         error: `Session ${sessionId} not found`
@@ -160,7 +160,7 @@ app.get('/health', async (req, res) => {
     res.json({
       success: true,
       status: 'active',
-      sessions: Array.from(activeSessions.keys())
+      sessions: sessionManager.listSessions().map(s => s.id)
     });
   } catch (error) {
     console.error(`Health check failed: ${error}`);
@@ -181,17 +181,20 @@ app.post('/session', (req, res) => {
 async function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
   const sessionId = `session-${Date.now()}`;
-  const useWebUIBrowser = req.body.settings?.useWebUIBrowser || false;
+  
+  // Use the useOpenOperatorBrowser flag if it exists, otherwise check for useWebUIBrowser
+  const useOpenOperatorBrowser = req.body.settings?.useOpenOperatorBrowser || 
+                               req.body.settings?.useNativeBrowser || 
+                               req.body.settings?.useWebUIBrowser || false;
 
-  activeSessions.set(sessionId, {
-    id: sessionId,
+  // Create session in session manager
+  const session = sessionManager.createSession(sessionId, {
     contextId: req.body.contextId || '',
-    createdAt: new Date(),
-    useWebUIBrowser
+    useOpenOperatorBrowser
   });
 
-  // Always create session successfully regardless of Web UI availability
-  const sessionUrl = useWebUIBrowser
+  // Create session URL
+  const sessionUrl = useOpenOperatorBrowser
     ? `${WEBUI_URL}/browser/${sessionId}`
     : `http://localhost:3000/browser/${sessionId}`;
 
@@ -201,13 +204,13 @@ async function createSession(req, res) {
     sessionId,
     contextId: req.body.contextId || '',
     sessionUrl,
-    connectUrl: useWebUIBrowser
+    connectUrl: useOpenOperatorBrowser
       ? `ws://localhost:${WEBUI_PORT}/ws`
       : `ws://localhost:3000/ws`,
-    wsUrl: useWebUIBrowser
+    wsUrl: useOpenOperatorBrowser
       ? `ws://localhost:${WEBUI_PORT}/ws`
       : `ws://localhost:3000/ws`,
-    debugUrl: useWebUIBrowser ? WEBUI_URL : 'http://localhost:3000'
+    debugUrl: useOpenOperatorBrowser ? WEBUI_URL : 'http://localhost:3000'
   };
 
   console.log('[Session Creation] Response:', response);
@@ -231,10 +234,10 @@ app.post('/intent', async (req, res) => {
     // Get session ID from either body or first previous step
     const sessionId = req.body.sessionId ||
                      (previousSteps.length > 0 ? previousSteps[0].sessionId : null);
-    const session = sessionId ? activeSessions.get(sessionId) : null;
+    const session = sessionId ? sessionManager.getSession(sessionId) : null;
 
-    if (session?.useWebUIBrowser) {
-      // If using WebUI browser, delegate intent processing (if applicable)
+    if (session?.useOpenOperatorBrowser) {
+      // If using Open Operator browser with WebUI, delegate intent processing
       // This part might need adjustment based on how WebUI handles intent vs execution
       try {
         const gradioRequest = {
@@ -245,7 +248,7 @@ app.post('/intent', async (req, res) => {
           llm_temperature: 0.7,            // Temperature
           llm_base_url: "",                // Base URL
           llm_api_key: "",                 // API key
-          use_own_browser: false,          // Use own browser
+          use_own_browser: session.useOpenOperatorBrowser,  // Use Open Operator's browser when enabled
           keep_browser_open: true,         // Keep browser open
           headless: false,                 // Headless mode
           disable_security: false,         // Disable security
@@ -387,18 +390,17 @@ app.post('/execute', async (req, res) => {
 
     console.log(`[Execute] Processing step for session ${sessionId}:`, step);
 
-    if (!activeSessions.has(sessionId)) {
+    const session = sessionManager.getSession(sessionId);
+    if (!session) {
       return res.status(404).json({
         success: false,
         error: `Session ${sessionId} not found`
       });
     }
 
-    const session = activeSessions.get(sessionId);
-
-    if (session?.useWebUIBrowser) {
+    if (session?.useOpenOperatorBrowser) {
       const webUIAvailable = await checkWebUIAvailability();
-      console.log(`[Execute] WebUI available: ${webUIAvailable}, useWebUIBrowser: ${session.useWebUIBrowser}`);
+      console.log(`[Execute] WebUI available: ${webUIAvailable}, useOpenOperatorBrowser: ${session.useOpenOperatorBrowser}`);
 
       if (webUIAvailable) {
         try {
@@ -428,7 +430,9 @@ app.post('/execute', async (req, res) => {
               args: step.args,
               text: step.text
             },
-            task
+            task,
+            use_own_browser: true, // Set to true to use Open Operator's browser
+            sessionId // Pass the sessionId to the bridge
           });
 
           console.log('[Execute] WebUI bridge response:', result);
@@ -518,14 +522,19 @@ app.post('/api/sessions/:sessionId/agent/run', async (req, res) => {
 
     console.log(`[Agent Run] Running task "${task}" for session ${sessionId}`);
 
-    if (!activeSessions.has(sessionId)) {
+    const session = sessionManager.getSession(sessionId);
+    if (!session) {
       return res.status(404).json({
         success: false,
         error: `Session ${sessionId} not found`
       });
     }
 
-    const result = await runPythonBridge('run_agent', { task, sessionId });
+    const result = await runPythonBridge('run_agent', { 
+      task, 
+      sessionId,
+      use_own_browser: session.useOpenOperatorBrowser
+    });
 
     if (!result || result.error) {
       throw new Error(result?.error || 'Unknown error running agent');
@@ -568,17 +577,16 @@ app.delete('/session', async (req, res) => {
 
   console.log(`[Session] Closing session ${sessionId}`);
 
-  if (!activeSessions.has(sessionId)) {
+  const session = sessionManager.getSession(sessionId);
+  if (!session) {
     return res.status(404).json({
       success: false,
       error: `Session ${sessionId} not found`
     });
   }
 
-  const session = activeSessions.get(sessionId);
-
   try {
-    if (session?.useWebUIBrowser && await checkWebUIAvailability()) {
+    if (session?.useOpenOperatorBrowser && await checkWebUIAvailability()) {
       try {
         // Notify Web UI to clean up session if available
         await fetch(`${WEBUI_API_URL}/agent/close`, {
@@ -591,7 +599,7 @@ app.delete('/session', async (req, res) => {
       }
     }
 
-    activeSessions.delete(sessionId);
+    sessionManager.deleteSession(sessionId);
     res.json({ success: true, message: 'Session closed successfully' });
   } catch (error) {
     console.error(`[Session] Error closing session: ${error}`);

@@ -508,6 +508,9 @@ def main():
                 client = Client(webui_url, verbose=False)
                 
                 # Call the run_with_stream endpoint
+                # Get the use_own_browser flag from args, defaulting to True
+                use_own_browser = args.get('use_own_browser', True)
+                
                 result = client.predict(
                     "custom",                      # agent_type
                     llm_provider,                  # llm_provider
@@ -515,7 +518,7 @@ def main():
                     llm_temperature,               # llm_temperature
                     llm_base_url,                  # llm_base_url
                     api_key,                       # llm_api_key
-                    False,                         # use_own_browser - FALSE to use a separate browser
+                    use_own_browser,               # use_own_browser - TRUE to use Open Operator's browser
                     True,                          # keep_browser_open
                     False,                         # headless - FALSE to show the browser window
                     False,                         # disable_security - DON'T disable security features
