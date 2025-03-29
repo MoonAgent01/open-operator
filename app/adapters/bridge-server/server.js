@@ -113,9 +113,9 @@ function mockBrowserResponse(action, options = {}) {
     case 'navigate':
       return {
         success: true,
-        url: options.url || 'https://example.com',
-        title: 'Example Page',
-        content: '<html><body><h1>Example Page</h1></body></html>'
+        url: options.url || 'https://google.com',
+        title: 'Google',
+        content: '<html><body><h1>Google Search</h1></body></html>'
       };
     case 'click':
       return {
@@ -125,11 +125,11 @@ function mockBrowserResponse(action, options = {}) {
     case 'extract':
       return {
         success: true,
-        url: 'https://example.com',
-        content: '<html><body><h1>Example Page</h1></body></html>',
+        url: 'https://google.com',
+        content: '<html><body><h1>Google Search</h1></body></html>',
         extraction: {
-          title: 'Example Page',
-          text: 'Example Page Content'
+          title: 'Google',
+          text: 'Google Search Results'
         }
       };
     default:
@@ -235,6 +235,40 @@ app.post('/intent', async (req, res) => {
     const sessionId = req.body.sessionId ||
                      (previousSteps.length > 0 ? previousSteps[0].sessionId : null);
     const session = sessionId ? sessionManager.getSession(sessionId) : null;
+    
+    // Task hash for loop detection
+    const taskHash = `${goal}`;
+    
+    // Record task in history for pattern-based detection
+    if (sessionId && previousSteps.length > 0) {
+      const lastStep = previousSteps[previousSteps.length - 1];
+      sessionManager.addTaskHistory(sessionId, lastStep);
+    }
+    
+    // Check for infinite loops using enhanced detection
+    if (sessionManager.isLoopDetected(sessionId)) {
+      console.log(`[Intent] Loop detected for session ${sessionId}, resetting task counter`);
+      sessionManager.resetTaskCounter(sessionId);
+      return res.status(400).json({
+        success: false,
+        error: 'Task loop detected - breaking cycle'
+      });
+    }
+    
+    // Check if task has already been completed
+    if (previousSteps.length > 1 && sessionManager.isTaskCompleted(sessionId, taskHash)) {
+      console.log(`[Intent] Task already completed for session ${sessionId}: ${taskHash}`);
+      return res.json({
+        success: true,
+        result: {
+          tool: 'CLOSE',
+          args: {},
+          text: 'Task already completed',
+          reasoning: 'This task was previously completed for this session',
+          instruction: 'No further action needed'
+        }
+      });
+    }
 
     if (session?.useOpenOperatorBrowser) {
       // If using Open Operator browser with WebUI, delegate intent processing
@@ -305,63 +339,129 @@ app.post('/intent', async (req, res) => {
     // Fallback to mock response if not using WebUI or if WebUI call failed
     let nextAction;
 
-    if (previousSteps.length === 0 || context.isFirstStep) {
+    // For goals that contain specific navigation targets, always navigate directly first
+    // regardless of whether it's the first step or not
+    if (goal.toLowerCase().includes('open youtube') || 
+        goal.toLowerCase().includes('go to youtube') || 
+        goal.toLowerCase() === 'youtube') {
+      nextAction = {
+        tool: 'NAVIGATE',
+        args: { url: 'https://youtube.com' },
+        text: 'Navigating to YouTube',
+        reasoning: 'Starting navigation to YouTube as requested',
+        instruction: 'Opening YouTube website'
+      };
+    } else if (previousSteps.length === 0 || context.isFirstStep) {
+      // Regular first step logic for other goals
       nextAction = {
         tool: 'NAVIGATE',
         args: {
           url: goal.toLowerCase().includes('youtube') ?
             'https://youtube.com' :
-            'https://example.com'
+            'https://google.com'
         },
-        text: `Navigating to ${goal.toLowerCase().includes('youtube') ? 'YouTube' : 'example.com'}`,
+        text: `Navigating to ${goal.toLowerCase().includes('youtube') ? 'YouTube' : 'Google'}`,
         reasoning: 'Starting navigation to fulfill the request',
-        instruction: `Opening ${goal.toLowerCase().includes('youtube') ? 'YouTube' : 'example.com'} website`
+        instruction: `Opening ${goal.toLowerCase().includes('youtube') ? 'YouTube' : 'Google'} website`
       };
     } else {
       const lastStep = previousSteps[previousSteps.length - 1];
-      switch (lastStep.tool.toUpperCase()) {
-        case 'NAVIGATE':
-          nextAction = {
-            tool: 'EXTRACT',
-            args: { selector: 'body' },
-            text: 'Reading page content',
-            reasoning: 'Extracting information from the current page',
-            instruction: 'Read the page content to understand the structure'
-          };
-          break;
-        case 'EXTRACT':
+      
+      // Handle special cases first
+      if (goal.toLowerCase().includes('open youtube') || 
+          goal.toLowerCase().includes('go to youtube') || 
+          goal.toLowerCase() === 'youtube') {
+        
+        // YouTube-specific flow after navigation
+        if (lastStep.tool.toUpperCase() === 'NAVIGATE') {
+          // If we just navigated to YouTube, now click the search box
           nextAction = {
             tool: 'CLICK',
-            args: {
-              selector: goal.toLowerCase().includes('youtube') ?
-                'input[name="search_query"]' :
-                'a[href="#example"]'
-            },
-            text: 'Clicking on element',
-            reasoning: 'Interacting with a relevant element',
-            instruction: `Click on ${goal.toLowerCase().includes('youtube') ? 'the search box' : 'a link'}`
+            args: { selector: 'input[name="search_query"]' },
+            text: 'Clicking on search input',
+            reasoning: 'Need to interact with the YouTube search box',
+            instruction: 'Click on the YouTube search field'
           };
-          break;
-        case 'CLICK':
-          nextAction = {
-            tool: 'TYPE',
-            args: {
-              text: goal,
-              selector: 'input[name="search_query"]'
-            },
-            text: 'Typing text',
-            reasoning: 'Entering search query',
-            instruction: `Type "${goal}" in the search field`
-          };
-          break;
-        default:
-          nextAction = {
-            tool: 'CLOSE',
-            args: {},
-            text: 'Finishing task',
-            reasoning: 'Completed the requested operations',
-            instruction: 'Close the current browser session'
-          };
+        } else {
+          // Follow generic flow for other steps
+          switch (lastStep.tool.toUpperCase()) {
+            case 'CLICK':
+              nextAction = {
+                tool: 'TYPE',
+                args: {
+                  text: goal.replace(/open\s+youtube\s*/i, '').trim() || 'popular videos',
+                  selector: 'input[name="search_query"]'
+                },
+                text: 'Typing search term',
+                reasoning: 'Entering search query on YouTube',
+                instruction: `Type in search term`
+              };
+              break;
+            case 'TYPE':
+              nextAction = {
+                tool: 'CLICK',
+                args: { selector: '#search-icon-legacy' },
+                text: 'Clicking search button',
+                reasoning: 'Submitting the search query',
+                instruction: 'Click the search button to perform search'
+              };
+              break;
+            default:
+              nextAction = {
+                tool: 'CLOSE',
+                args: {},
+                text: 'Finishing task',
+                reasoning: 'Completed requested YouTube navigation',
+                instruction: 'Close the current browser session'
+              };
+          }
+        }
+      } else {
+        // Generic flow for other goals
+        switch (lastStep.tool.toUpperCase()) {
+          case 'NAVIGATE':
+            nextAction = {
+              tool: 'EXTRACT',
+              args: { selector: 'body' },
+              text: 'Reading page content',
+              reasoning: 'Extracting information from the current page',
+              instruction: 'Read the page content to understand the structure'
+            };
+            break;
+          case 'EXTRACT':
+            nextAction = {
+              tool: 'CLICK',
+              args: {
+                selector: goal.toLowerCase().includes('youtube') ?
+                  'input[name="search_query"]' :
+                  'a[href="#example"]'
+              },
+              text: 'Clicking on element',
+              reasoning: 'Interacting with a relevant element',
+              instruction: `Click on ${goal.toLowerCase().includes('youtube') ? 'the search box' : 'a link'}`
+            };
+            break;
+          case 'CLICK':
+            nextAction = {
+              tool: 'TYPE',
+              args: {
+                text: goal,
+                selector: 'input[name="search_query"]'
+              },
+              text: 'Typing text',
+              reasoning: 'Entering search query',
+              instruction: `Type "${goal}" in the search field`
+            };
+            break;
+          default:
+            nextAction = {
+              tool: 'CLOSE',
+              args: {},
+              text: 'Finishing task',
+              reasoning: 'Completed the requested operations',
+              instruction: 'Close the current browser session'
+            };
+        }
       }
     }
 
@@ -395,6 +495,25 @@ app.post('/execute', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: `Session ${sessionId} not found`
+      });
+    }
+    
+    // Add step to task history for loop detection
+    sessionManager.addTaskHistory(sessionId, step);
+    
+    // Check for infinite loops during execution
+    if (sessionManager.isLoopDetected(sessionId)) {
+      console.log(`[Execute] Loop detected for session ${sessionId} during execution, forcing CLOSE`);
+      sessionManager.resetTaskCounter(sessionId);
+      return res.json({
+        success: true,
+        result: {
+          tool: 'CLOSE',
+          args: {},
+          text: 'Task loop detected - stopping execution',
+          reasoning: 'A potential infinite loop was detected',
+          instruction: 'Stopping task execution to prevent looping'
+        }
       });
     }
 
@@ -441,11 +560,28 @@ app.post('/execute', async (req, res) => {
             throw new Error(result?.error || 'Unknown error executing step');
           }
 
+          // Check if the task has been completed from the WebUI response
+          const isDone = 
+            (result.finalResult && result.finalResult.toLowerCase().includes('complet')) ||
+            (result.thoughts && result.thoughts.toLowerCase().includes('complet')) ||
+            step.tool.toUpperCase() === 'DONE';
+
+          // If this is a completion action, mark the task as completed
+          if (isDone || step.tool.toUpperCase() === 'CLOSE') {
+            const context = req.body.context || {};
+            const goal = context.goal || context.task || '';
+            
+            if (goal) {
+              console.log(`[Execute] WebUI marked task as completed for session ${sessionId}: ${goal}`);
+              sessionManager.markTaskCompleted(sessionId, goal);
+            }
+          }
+          
           // Process the response from gradio_bridge.py
           return res.json({
             success: true,
             result: {
-              url: step.args.url || 'https://example.com',
+              url: step.args.url || 'https://google.com',
               content: result.browserView || '<html><body>Content N/A</body></html>',
               extraction: result.extraction || {},
               text: result.finalResult || step.text,
@@ -471,6 +607,20 @@ app.post('/execute', async (req, res) => {
 
     // Fallback to mock if Web UI not selected or failed
     const mockResult = mockBrowserResponse(step.tool.toLowerCase(), step.args);
+    
+    // Handle task completion for terminal actions
+    if (step.tool.toUpperCase() === 'CLOSE' || 
+        (step.text && step.text.toLowerCase().includes('complet'))) {
+      // Get the goal/task from session context if available
+      const context = req.body.context || {};
+      const goal = context.goal || context.task || '';
+      
+      if (goal) {
+        console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
+        sessionManager.markTaskCompleted(sessionId, goal);
+      }
+    }
+    
     res.json({
       success: true,
       result: {

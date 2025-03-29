@@ -170,8 +170,15 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
               steps: [newStep],
             }));
 
-            // Continue with subsequent steps
-            while (true) {
+            // Set a hard limit on maximum steps to prevent infinite loops
+            const MAX_STEPS = 15;
+            let stepCount = 0;
+            
+            // Continue with subsequent steps (with hard limits)
+            while (stepCount < MAX_STEPS) {
+              stepCount++;
+              console.log(`Executing step ${stepCount}/${MAX_STEPS}`);
+              
               // Get next step from LLM
               const nextStepResponse = await fetch("/api/agent", {
                 method: "POST",
@@ -229,8 +236,36 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
                 steps: agentStateRef.current.steps,
               }));
 
-              // Break after adding the CLOSE step to UI
-              if (nextStepData.done || nextStepData.result.tool === "CLOSE") {
+              // Break after adding the CLOSE step to UI or when task is marked as done
+              if (nextStepData.done || 
+                  nextStepData.result.tool === "CLOSE" || 
+                  (nextStepData.result.text && (
+                    nextStepData.result.text.toLowerCase().includes('complet') ||
+                    nextStepData.result.text.toLowerCase().includes('already')
+                  ))) {
+                console.log("Task completed, breaking execution loop");
+                
+                // If the step doesn't have tool=CLOSE, add a proper CLOSE step to ensure UI shows completion
+                if (nextStepData.result.tool !== "CLOSE") {
+                  const closeStep = {
+                    text: "Task completed successfully",
+                    reasoning: "All requested operations have been completed",
+                    tool: "CLOSE" as const, 
+                    instruction: "Session is now closed",
+                    stepNumber: agentStateRef.current.steps.length + 1,
+                  };
+                  
+                  agentStateRef.current = {
+                    ...agentStateRef.current,
+                    steps: [...agentStateRef.current.steps, closeStep],
+                  };
+                  
+                  setUiState((prev) => ({
+                    ...prev,
+                    steps: agentStateRef.current.steps,
+                  }));
+                }
+                
                 break;
               }
 

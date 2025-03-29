@@ -184,14 +184,39 @@ export async function POST(request: NextRequest) {
           const intentData = await intentResponse.json();
           
           if (!intentData.success) {
+            // Handle loop detection error from bridge server
+            if (intentData.error && intentData.error.includes('loop detected')) {
+              console.log('Loop detected in bridge server, returning CLOSE action');
+              return NextResponse.json({
+                success: true,
+                result: {
+                  tool: "CLOSE",
+                  args: {},
+                  text: "Task loop detected - stopping execution",
+                  reasoning: "A potential infinite loop was detected",
+                  instruction: "Stopping task execution to prevent looping"
+                },
+                steps: [...previousSteps],
+                done: true
+              });
+            }
             throw new Error(intentData.error || 'Failed to get next step');
           }
+
+          // Check if the task is already completed by looking for CLOSE tool type
+          // or text containing "completed" or "already"
+          const isTaskCompleted = 
+            intentData.result.tool === "CLOSE" || 
+            (intentData.result.text && (
+              intentData.result.text.toLowerCase().includes('complet') ||
+              intentData.result.text.toLowerCase().includes('already')
+            ));
 
           return NextResponse.json({
             success: true,
             result: intentData.result,
             steps: [...previousSteps, intentData.result],
-            done: intentData.result.tool === "CLOSE"
+            done: isTaskCompleted
           });
         } catch (error: any) {
           console.error('Error getting next step:', error);
