@@ -101,7 +101,8 @@ def execute_step(args):
                 "tool": step.get("tool", ""),
                 "args": step.get("args", {}),
                 "text": step.get("text", ""),
-                "task": task
+                "task": task,
+                "use_own_browser": args.get("use_own_browser", True)
             })
         ]
         

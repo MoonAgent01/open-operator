@@ -6,6 +6,8 @@ import ChatFeed from "./components/ChatFeed";
 import AnimatedButton from "./components/AnimatedButton";
 import Image from "next/image";
 import posthog from "posthog-js";
+import { useAtom } from "jotai";
+import { useWebuiBrowserAtom } from "./atoms";
 
 const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }) => {
   return (
@@ -21,13 +23,11 @@ const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }
 export default function Home() {
   const [isChatVisible, setIsChatVisible] = useState(false);
   const [initialMessage, setInitialMessage] = useState("");
-  const [browserMode, setBrowserMode] = useState<'Native'|'Web UI'>('Native');
+  const [useWebuiBrowser, setUseWebuiBrowser] = useAtom(useWebuiBrowserAtom);
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
-    const savedMode = localStorage.getItem('useWebUIBrowser') === 'true' ? 'Web UI' : 'Native';
-    setBrowserMode(savedMode);
   }, []);
 
   useEffect(() => {
@@ -93,24 +93,25 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-ppsupply text-gray-500">Browser:</span>
+                <span className="text-sm font-ppsupply text-gray-500">Browser Mode:</span>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input 
                     type="checkbox" 
                     className="sr-only peer" 
-                    checked={browserMode === 'Web UI'}
+                    checked={useWebuiBrowser}
                     onChange={(e) => {
-                      const mode = e.target.checked ? 'Web UI' : 'Native';
-                      localStorage.setItem('useWebUIBrowser', e.target.checked.toString());
-                      setBrowserMode(mode);
+                      const newValue = e.target.checked;
+                      localStorage.setItem('useWebuiBrowser', newValue.toString());
+                      setUseWebuiBrowser(newValue);
                     }}
                   />
                   <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#FF3B00]"></div>
                   <span className="ml-2 text-sm font-ppsupply text-gray-700">
-                    {isMounted ? browserMode : 'Loading...'}
+                    {isMounted ? (useWebuiBrowser ? 'WebUI Browser' : 'Native Browser') : 'Loading...'}
                   </span>
                 </label>
               </div>
+
               <a
                 href="https://github.com/browserbase/open-operator"
                 target="_blank" 
@@ -155,14 +156,18 @@ export default function Home() {
 
                 <form
                   onSubmit={(e) => {
-                    e.preventDefault();
-                    const formData = new FormData(e.currentTarget);
-                    const input = e.currentTarget.querySelector(
-                      'input[name="message"]'
-                    ) as HTMLInputElement;
-                    const message = (formData.get("message") as string).trim();
-                    const finalMessage = message || input.placeholder;
-                    startChat(finalMessage);
+                        e.preventDefault();
+                        const formData = new FormData(e.currentTarget);
+                        const input = e.currentTarget.querySelector(
+                          'input[name="message"]'
+                        ) as HTMLInputElement;
+                        const message = (formData.get("message") as string).trim();
+                        const finalMessage = message || input.placeholder;
+                        
+                        // Add session settings - now we just have a single setting
+                        sessionStorage.setItem("useWebuiBrowser", useWebuiBrowser.toString());
+                        
+                        startChat(finalMessage);
                   }}
                   className="w-full max-w-[720px] flex flex-col items-center gap-3"
                 >

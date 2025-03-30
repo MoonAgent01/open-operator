@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const bodyParser = require('body-parser');
 const sessionManager = require('./session-manager');
+const browserbaseConnector = require('./browserbase-connector');
 
 const app = express();
 const PORT = process.env.PORT || 7789;
@@ -168,6 +169,27 @@ app.get('/health', async (req, res) => {
   }
 });
 
+// Browserbase health check endpoint
+app.get('/browserbase/health', async (req, res) => {
+  try {
+    // Check if Browserbase adapter is available
+    const isAvailable = await browserbaseConnector.isAvailable();
+    
+    res.json({
+      success: true,
+      available: isAvailable,
+      message: isAvailable ? 'Browserbase adapter is available' : 'Browserbase adapter not found'
+    });
+  } catch (error) {
+    console.error(`Browserbase health check failed: ${error}`);
+    res.status(500).json({ 
+      success: false, 
+      available: false,
+      error: error.message 
+    });
+  }
+});
+
 // Create a new session (with /api prefix)
 app.post('/api/session', (req, res) => {
   createSession(req, res);
@@ -182,21 +204,73 @@ async function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
   const sessionId = `session-${Date.now()}`;
   
-  // Use the useOpenOperatorBrowser flag if it exists, otherwise check for useWebUIBrowser
-  const useOpenOperatorBrowser = req.body.settings?.useOpenOperatorBrowser || 
-                               req.body.settings?.useNativeBrowser || 
-                               req.body.settings?.useWebUIBrowser || false;
-
+  // Check if WebUI browser should be used
+  const useWebUIBrowser = req.body.settings?.useWebUIBrowser || 
+                         req.body.settings?.useOpenOperatorBrowser || 
+                         req.body.settings?.useNativeBrowser || false;
+  
+  // Create session in session manager - when WebUI is used, we automatically use Browserbase features
+  const useBrowserbase = useWebUIBrowser; // Browserbase is enabled whenever WebUI is
+  
   // Create session in session manager
   const session = sessionManager.createSession(sessionId, {
     contextId: req.body.contextId || '',
-    useOpenOperatorBrowser
+    useOpenOperatorBrowser: useWebUIBrowser,
+    useBrowserbase
   });
 
-  // Create session URL
-  const sessionUrl = useOpenOperatorBrowser
-    ? `${WEBUI_URL}/browser/${sessionId}`
-    : `http://localhost:3000/browser/${sessionId}`;
+  // Create session URL and connection details based on browser type
+  let sessionUrl, connectUrl, wsUrl, debugUrl;
+  
+  if (useWebUIBrowser) {
+    // If using WebUI Browser with Browserbase features
+    try {
+      // Try to create a Browserbase session if the adapter is available
+      try {
+        console.log('[Session Creation] Using Browserbase for WebUI browser sessions');
+        
+        const browserbaseSession = await browserbaseConnector.createSession({
+          headless: req.body.settings?.headless || false,
+          window_w: req.body.settings?.browserSettings?.windowSize?.width || 1366,
+          window_h: req.body.settings?.browserSettings?.windowSize?.height || 768
+        });
+        
+        // Store Browserbase session ID in the session manager
+        sessionManager.updateSession(sessionId, {
+          browserbaseSessionId: browserbaseSession.id
+        });
+        
+        // Use Browserbase session URLs
+        sessionUrl = browserbaseSession.debug_url || `http://localhost:3000/browser/${sessionId}`;
+        connectUrl = browserbaseSession.connect_url || `ws://localhost:3000/ws`;
+        wsUrl = browserbaseSession.ws_url || `ws://localhost:3000/ws`;
+        debugUrl = browserbaseSession.debug_url || 'http://localhost:3000';
+        
+        console.log('[Session Creation] Successfully created Browserbase session');
+      } catch (error) {
+        console.log('[Session Creation] Could not create Browserbase session, falling back to WebUI');
+        
+        // Fall back to standard WebUI if Browserbase is not available
+        sessionUrl = `${WEBUI_URL}/browser/${sessionId}`;
+        connectUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+        wsUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+        debugUrl = WEBUI_URL;
+      }
+    } catch (error) {
+      console.error('[Session Creation] WebUI error:', error);
+      // Fall back to default values if WebUI fails
+      sessionUrl = `http://localhost:3000/browser/${sessionId}`;
+      connectUrl = `ws://localhost:3000/ws`;
+      wsUrl = `ws://localhost:3000/ws`;
+      debugUrl = 'http://localhost:3000';
+    }
+  } else {
+    // Native Open Operator browser (no WebUI)
+    sessionUrl = `http://localhost:3000/browser/${sessionId}`;
+    connectUrl = `ws://localhost:3000/ws`;
+    wsUrl = `ws://localhost:3000/ws`;
+    debugUrl = 'http://localhost:3000';
+  }
 
   // Send response with session info
   const response = {
@@ -204,13 +278,9 @@ async function createSession(req, res) {
     sessionId,
     contextId: req.body.contextId || '',
     sessionUrl,
-    connectUrl: useOpenOperatorBrowser
-      ? `ws://localhost:${WEBUI_PORT}/ws`
-      : `ws://localhost:3000/ws`,
-    wsUrl: useOpenOperatorBrowser
-      ? `ws://localhost:${WEBUI_PORT}/ws`
-      : `ws://localhost:3000/ws`,
-    debugUrl: useOpenOperatorBrowser ? WEBUI_URL : 'http://localhost:3000'
+    connectUrl,
+    wsUrl,
+    debugUrl
   };
 
   console.log('[Session Creation] Response:', response);
@@ -339,129 +409,79 @@ app.post('/intent', async (req, res) => {
     // Fallback to mock response if not using WebUI or if WebUI call failed
     let nextAction;
 
-    // For goals that contain specific navigation targets, always navigate directly first
-    // regardless of whether it's the first step or not
-    if (goal.toLowerCase().includes('open youtube') || 
-        goal.toLowerCase().includes('go to youtube') || 
-        goal.toLowerCase() === 'youtube') {
+    // For first steps, always navigate to Google
+    if (previousSteps.length === 0 || context.isFirstStep) {
       nextAction = {
         tool: 'NAVIGATE',
-        args: { url: 'https://youtube.com' },
-        text: 'Navigating to YouTube',
-        reasoning: 'Starting navigation to YouTube as requested',
-        instruction: 'Opening YouTube website'
-      };
-    } else if (previousSteps.length === 0 || context.isFirstStep) {
-      // Regular first step logic for other goals
-      nextAction = {
-        tool: 'NAVIGATE',
-        args: {
-          url: goal.toLowerCase().includes('youtube') ?
-            'https://youtube.com' :
-            'https://google.com'
-        },
-        text: `Navigating to ${goal.toLowerCase().includes('youtube') ? 'YouTube' : 'Google'}`,
-        reasoning: 'Starting navigation to fulfill the request',
-        instruction: `Opening ${goal.toLowerCase().includes('youtube') ? 'YouTube' : 'Google'} website`
+        args: { url: 'https://google.com' },
+        text: 'Navigating to Google',
+        reasoning: 'Starting with Google to help fulfill this request',
+        instruction: 'Opening Google as the default starting point'
       };
     } else {
       const lastStep = previousSteps[previousSteps.length - 1];
       
-      // Handle special cases first
-      if (goal.toLowerCase().includes('open youtube') || 
-          goal.toLowerCase().includes('go to youtube') || 
-          goal.toLowerCase() === 'youtube') {
-        
-        // YouTube-specific flow after navigation
-        if (lastStep.tool.toUpperCase() === 'NAVIGATE') {
-          // If we just navigated to YouTube, now click the search box
+      // Generic flow based on previous step
+      switch (lastStep.tool.toUpperCase()) {
+        case 'NAVIGATE':
+          nextAction = {
+            tool: 'EXTRACT',
+            args: { selector: 'body' },
+            text: 'Reading page content',
+            reasoning: 'Extracting page information to determine next steps',
+            instruction: 'Analyze the page content'
+          };
+          break;
+          
+        case 'EXTRACT':
+          // For Google, look for the search box
           nextAction = {
             tool: 'CLICK',
-            args: { selector: 'input[name="search_query"]' },
+            args: {
+              selector: 'input[name="q"]'  // Google's search input
+            },
             text: 'Clicking on search input',
-            reasoning: 'Need to interact with the YouTube search box',
-            instruction: 'Click on the YouTube search field'
+            reasoning: 'Interacting with the search field',
+            instruction: 'Click on the search box'
           };
-        } else {
-          // Follow generic flow for other steps
-          switch (lastStep.tool.toUpperCase()) {
-            case 'CLICK':
-              nextAction = {
-                tool: 'TYPE',
-                args: {
-                  text: goal.replace(/open\s+youtube\s*/i, '').trim() || 'popular videos',
-                  selector: 'input[name="search_query"]'
-                },
-                text: 'Typing search term',
-                reasoning: 'Entering search query on YouTube',
-                instruction: `Type in search term`
-              };
-              break;
-            case 'TYPE':
-              nextAction = {
-                tool: 'CLICK',
-                args: { selector: '#search-icon-legacy' },
-                text: 'Clicking search button',
-                reasoning: 'Submitting the search query',
-                instruction: 'Click the search button to perform search'
-              };
-              break;
-            default:
-              nextAction = {
-                tool: 'CLOSE',
-                args: {},
-                text: 'Finishing task',
-                reasoning: 'Completed requested YouTube navigation',
-                instruction: 'Close the current browser session'
-              };
-          }
-        }
-      } else {
-        // Generic flow for other goals
-        switch (lastStep.tool.toUpperCase()) {
-          case 'NAVIGATE':
-            nextAction = {
-              tool: 'EXTRACT',
-              args: { selector: 'body' },
-              text: 'Reading page content',
-              reasoning: 'Extracting information from the current page',
-              instruction: 'Read the page content to understand the structure'
-            };
-            break;
-          case 'EXTRACT':
-            nextAction = {
-              tool: 'CLICK',
-              args: {
-                selector: goal.toLowerCase().includes('youtube') ?
-                  'input[name="search_query"]' :
-                  'a[href="#example"]'
-              },
-              text: 'Clicking on element',
-              reasoning: 'Interacting with a relevant element',
-              instruction: `Click on ${goal.toLowerCase().includes('youtube') ? 'the search box' : 'a link'}`
-            };
-            break;
-          case 'CLICK':
-            nextAction = {
-              tool: 'TYPE',
-              args: {
-                text: goal,
-                selector: 'input[name="search_query"]'
-              },
-              text: 'Typing text',
-              reasoning: 'Entering search query',
-              instruction: `Type "${goal}" in the search field`
-            };
-            break;
-          default:
-            nextAction = {
-              tool: 'CLOSE',
-              args: {},
-              text: 'Finishing task',
-              reasoning: 'Completed the requested operations',
-              instruction: 'Close the current browser session'
-            };
-        }
+          break;
+          
+        case 'CLICK':
+          // If we just clicked, we probably want to type something
+          nextAction = {
+            tool: 'TYPE',
+            args: {
+              text: goal,  // Use the goal as our search term
+              selector: 'input[name="q"]'
+            },
+            text: 'Typing search query',
+            reasoning: 'Entering information to search for',
+            instruction: 'Type the search query'
+          };
+          break;
+          
+        case 'TYPE':
+          // After typing in a search box, click search button
+          nextAction = {
+            tool: 'CLICK',
+            args: {
+              selector: 'input[name="btnK"], button[name="btnK"]'  // Google's search button
+            },
+            text: 'Clicking search button',
+            reasoning: 'Submitting the search query',
+            instruction: 'Click the search button'
+          };
+          break;
+          
+        default:
+          // Final step - close the session
+          nextAction = {
+            tool: 'CLOSE',
+            args: {},
+            text: 'Finishing task',
+            reasoning: 'Task steps completed',
+            instruction: 'Close the current browser session'
+          };
       }
     }
 
@@ -517,7 +537,101 @@ app.post('/execute', async (req, res) => {
       });
     }
 
-    if (session?.useOpenOperatorBrowser) {
+    // Determine which browser implementation to use
+    if (session?.useBrowserbase) {
+      console.log(`[Execute] Using Browserbase for session ${sessionId}`);
+      
+      const browserbaseSessionId = session.browserbaseSessionId;
+      if (!browserbaseSessionId) {
+        return res.status(400).json({
+          success: false,
+          error: `Browserbase session ID not found for session ${sessionId}`
+        });
+      }
+      
+      try {
+        // Handle different tool types using Browserbase
+        let result;
+        
+        switch(step.tool.toUpperCase()) {
+          case 'NAVIGATE':
+            result = await browserbaseConnector.navigate(
+              browserbaseSessionId, 
+              step.args.url
+            );
+            break;
+            
+          case 'CLICK':
+            result = await browserbaseConnector.click(
+              browserbaseSessionId,
+              step.args.selector || step.args.text
+            );
+            break;
+            
+          case 'TYPE':
+            result = await browserbaseConnector.type(
+              browserbaseSessionId,
+              step.args.selector,
+              step.args.text
+            );
+            break;
+            
+          case 'EXTRACT':
+            result = await browserbaseConnector.extract(
+              browserbaseSessionId,
+              step.args.selector
+            );
+            break;
+            
+          case 'CLOSE':
+            await browserbaseConnector.closeSession(browserbaseSessionId);
+            
+            // Get the goal/task from session context if available
+            const context = req.body.context || {};
+            const goal = context.goal || context.task || '';
+            
+            if (goal) {
+              console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
+              sessionManager.markTaskCompleted(sessionId, goal);
+            }
+            
+            return res.json({
+              success: true,
+              result: {
+                text: step.text || 'Browser closed',
+                reasoning: step.reasoning || 'Task completed',
+                instruction: step.instruction || 'Session closed'
+              }
+            });
+            
+          default:
+            return res.status(400).json({
+              success: false,
+              error: `Unsupported tool type for Browserbase: ${step.tool}`
+            });
+        }
+        
+        // Return the result
+        return res.json({
+          success: true,
+          result: {
+            url: step.args.url || 'https://example.com',
+            content: '<html><body>Content from Browserbase</body></html>',
+            extraction: result,
+            text: step.text,
+            reasoning: step.reasoning,
+            instruction: step.instruction
+          }
+        });
+        
+      } catch (error) {
+        console.error(`[Execute] Browserbase error:`, error);
+        return res.status(500).json({
+          success: false,
+          error: `Browserbase error: ${error.message}`
+        });
+      }
+    } else if (session?.useOpenOperatorBrowser) {
       const webUIAvailable = await checkWebUIAvailability();
       console.log(`[Execute] WebUI available: ${webUIAvailable}, useOpenOperatorBrowser: ${session.useOpenOperatorBrowser}`);
 
@@ -735,8 +849,19 @@ app.delete('/session', async (req, res) => {
     });
   }
 
-  try {
-    if (session?.useOpenOperatorBrowser && await checkWebUIAvailability()) {
+    try {
+      if (session?.useBrowserbase) {
+        // If using Browserbase, close the Browserbase session
+        const browserbaseSessionId = session.browserbaseSessionId;
+        if (browserbaseSessionId) {
+          try {
+            await browserbaseConnector.closeSession(browserbaseSessionId);
+            console.log(`[Session] Closed Browserbase session ${browserbaseSessionId}`);
+          } catch (error) {
+            console.error('[Session] Browserbase cleanup failed:', error);
+          }
+        }
+      } else if (session?.useOpenOperatorBrowser && await checkWebUIAvailability()) {
       try {
         // Notify Web UI to clean up session if available
         await fetch(`${WEBUI_API_URL}/agent/close`, {

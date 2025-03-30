@@ -89,8 +89,9 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
       initializationRef.current = true;
 
       if (initialMessage && !agentStateRef.current.sessionId) {
-        const useWebUIBrowser = typeof window !== 'undefined' && 
-          localStorage.getItem('useWebUIBrowser') === 'true';
+        const useWebuiBrowser = typeof window !== 'undefined' && 
+          sessionStorage.getItem('useWebuiBrowser') === 'true';
+        
         setIsLoading(true);
         try {
               const sessionResponse = await fetch("/api/session", {
@@ -102,7 +103,7 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
                   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                   contextId: contextId,
                   settings: {
-                    useWebUIBrowser: useWebUIBrowser
+                    useWebUIBrowser: useWebuiBrowser
                   }
                 }),
               });
