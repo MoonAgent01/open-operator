@@ -7,8 +7,8 @@ import AnimatedButton from "./components/AnimatedButton";
 import Image from "next/image";
 import posthog from "posthog-js";
 import { useAtom } from "jotai";
-// Import the correct atom and enum
 import { browserTypeAtom, BrowserType } from "./atoms";
+import BrowserSelector from "./components/BrowserSelector";
 
 const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }) => {
   return (
@@ -94,19 +94,7 @@ export default function Home() {
               <span className="font-ppsupply text-gray-900">Open Operator</span>
             </div>
             <div className="flex items-center gap-4">
-              {/* Restore the original dropdown selector */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-ppsupply text-gray-500">Browser:</span>
-                <select
-                  className="ml-2 px-3 py-1.5 text-sm font-ppsupply text-gray-700 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-[#FF3B00] focus:border-transparent"
-                  value={browserType} // Use browserType state
-                  onChange={(e) => setBrowserType(e.target.value as BrowserType)} // Update browserType state
-                >
-                  {/* Use enum members for values */}
-                  <option value={BrowserType.Browserbase}>Browserbase</option>
-                  <option value={BrowserType.Native}>Native Browser</option>
-                </select>
-              </div>
+              <BrowserSelector />
 
               <a
                 href="https://github.com/browserbase/open-operator"

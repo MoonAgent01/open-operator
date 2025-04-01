@@ -107,7 +107,8 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
 
         setIsLoading(true);
         try {
-              console.log("[ChatFeed] Sending request to /api/session..."); // Add log
+              console.log(`[ChatFeed] Creating session with browser type: ${browserType}`);
+              console.log("[ChatFeed] Sending request to /api/session...");
               const sessionResponse = await fetch("/api/session", {
                 method: "POST",
                 headers: {
@@ -116,12 +117,18 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
                 body: JSON.stringify({
                   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                   contextId: contextId,
-                  // Send the browserType enum value to the API route
                   browserType: browserType,
-                  // Settings might still be needed for other options
                   settings: {
-                    // No need to send useWebUIBrowser or useBrowserbase here,
-                    // the API route determines it from browserType
+                    useBrowserbase: browserType === BrowserType.Browserbase,
+                    browserType: browserType, // Pass the actual enum value for logging
+                    browserSettings: {
+                      headless: false,
+                      useExistingBrowser: false,
+                      keepBrowserOpen: true,
+                      keepBrowserOpenBetweenTasks: true,
+                      windowSize: { width: 1366, height: 768 },
+                      showBrowser: true
+                    }
                   }
                 }),
               });
@@ -166,6 +173,11 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
           });
 
           const data = await response.json();
+          console.log("[ChatFeed] Agent response:", data);
+
+          if (!data.success) {
+            throw new Error(data.error || "Agent request failed");
+          }
           posthog.capture("agent_start", {
             goal: initialMessage,
             sessionId: sessionData.sessionId,

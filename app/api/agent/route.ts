@@ -99,15 +99,15 @@ export async function POST(request: NextRequest) {
               contextId: goal,
               timezone: 'UTC',
               settings: {
-                browserSettings: {
-                  headless: false,
-                  useExistingBrowser: false,
-                  keepBrowserOpen: true,
-                  keepBrowserOpenBetweenTasks: true,
-                  windowSize: { width: 1366, height: 768 },
-                  showBrowser: true,
-                  useOwnBrowser: false
-                },
+                  useBrowserbase: true, // Default to using Browserbase
+                  browserSettings: {
+                    headless: false,
+                    useExistingBrowser: false,
+                    keepBrowserOpen: true,
+                    keepBrowserOpenBetweenTasks: true,
+                    windowSize: { width: 1366, height: 768 },
+                    showBrowser: true
+                  },
                 metadata: { source: 'open-operator', version: '1.0.0' }
               }
             }),
@@ -177,7 +177,11 @@ export async function POST(request: NextRequest) {
             body: JSON.stringify({
               goal,
               previousSteps,
-              sessionId
+              sessionId,
+              context: {
+                useBrowserbase: true, // Pass browser info in context
+                sessionId
+              }
             }),
           });
 
@@ -246,7 +250,11 @@ export async function POST(request: NextRequest) {
             },
             body: JSON.stringify({
               sessionId,
-              step
+              step,
+              context: {
+                useBrowserbase: true, // Pass browser info in context
+                sessionId
+              }
             }),
           });
 

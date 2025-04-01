@@ -74,15 +74,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // --- Read browserType from request body ---
-    // Default to Browserbase if not provided or invalid
+    // Read browserType from request body
     const browserType: BrowserType =
       body.browserType === BrowserType.Native
         ? BrowserType.Native
         : BrowserType.Browserbase;
 
-    // --- Construct settings based on browserType ---
+    console.log(`[Session API] Creating session with browser type: ${browserType}`);
+
+    // Construct settings based on browserType
     const useBrowserbase = browserType === BrowserType.Browserbase;
+    console.log(`[Session API] Using Browserbase: ${useBrowserbase}`);
 
     // Base settings, potentially overridden by client request body.settings
     const defaultSettings = {
@@ -112,7 +114,11 @@ export async function POST(request: NextRequest) {
       settings: finalSettings // Use the constructed settings
     };
 
-    console.log(`Creating new session with browserType: ${browserType}, options:`, options);
+    console.log(`[Session API] Creating new session with options:`, {
+      browserType,
+      useBrowserbase,
+      ...options
+    });
     
     try {
       // Create session via bridge server
@@ -134,7 +140,7 @@ export async function POST(request: NextRequest) {
         throw new Error(sessionData.error || 'Unknown bridge server error');
       }
       
-      console.log("Session created:", {
+      console.log("[Session API] Session created:", {
         id: sessionData.sessionId,
         contextId: sessionData.contextId,
         url: sessionData.sessionUrl

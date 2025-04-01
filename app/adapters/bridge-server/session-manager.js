@@ -20,7 +20,6 @@ const sessionManager = {
     const session = {
       id: sessionId,
       contextId: options.contextId || '',
-      useOpenOperatorBrowser: options.useOpenOperatorBrowser || false,
       useBrowserbase: options.useBrowserbase || false,
       createdAt: new Date(),
       lastActivity: new Date(),
