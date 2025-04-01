@@ -192,43 +192,69 @@ app.get('/browserbase/health', async (req, res) => {
   }
 });
 
-// Create a new session (with /api prefix)
-app.post('/api/session', (req, res) => {
-  createSession(req, res);
-});
-
-// Create a new session (without /api prefix)
-app.post('/session', (req, res) => {
-  createSession(req, res);
-});
+// Create new session endpoints
+app.post(['/api/session', '/session'], createSession);
 
 async function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
+
   const sessionId = `session-${Date.now()}`;
 
-  // --- Use the 'useBrowserbase' flag from settings ---
-  // Default to false if not provided
-  const useBrowserbase = req.body.settings?.useBrowserbase === true;
-
-  console.log(`[Session Creation] useBrowserbase flag: ${useBrowserbase}`);
+  // Check if this is a request to use WebUI's external browser
+  const useWebUIBrowser = req.body.settings?.useOwnBrowser === true || 
+                         req.body.settings?.browserSettings?.useOwnBrowser === true;
 
   // Create session in session manager
   const session = sessionManager.createSession(sessionId, {
     contextId: req.body.contextId || '',
-    // Store the definitive flag in the session manager
-    useBrowserbase: useBrowserbase,
-    // Deprecate useOpenOperatorBrowser if useBrowserbase is the primary flag
-    useOpenOperatorBrowser: useBrowserbase, // Keep this for backward compatibility
+    useWebUI: useWebUIBrowser,
+    useOpenOperatorBrowser: useWebUIBrowser
   });
 
-  // Create session URL and connection details based on browser type
+  // Create session URL and connection details
   let sessionUrl, connectUrl, wsUrl, debugUrl;
 
-  // --- Branch logic based on the useBrowserbase flag ---
-  if (useBrowserbase) {
-    // If using Browserbase mode
+  // Check if WebUI is available when using external browser
+  if (useWebUIBrowser) {
     try {
-      // First try the Node.js SDK approach (new intended logic)
+      const webUIAvailable = await checkWebUIAvailability();
+      if (!webUIAvailable) {
+        throw new Error('WebUI not available');
+      }
+
+      // Create CDP-based browser session
+      const browserSession = await browserbaseConnector.createSession({
+        cdpPort: req.body.settings?.cdpPort || 9222,
+        headless: req.body.settings?.headless || false,
+        width: req.body.settings?.browserSettings?.windowSize?.width || 1366,
+        height: req.body.settings?.browserSettings?.windowSize?.height || 768
+      });
+
+      // Store CDP connection details
+      sessionManager.updateSession(sessionId, {
+        browserbaseSessionId: browserSession.id,
+        browserbaseConnectUrl: browserSession.connect_url
+      });
+
+      // Use CDP connection URLs
+      sessionUrl = browserSession.debug_url;
+      connectUrl = browserSession.connect_url;
+      wsUrl = browserSession.ws_url;
+      debugUrl = browserSession.debug_url;
+
+    } catch (error) {
+      console.error('[Session Creation] Failed to create CDP session:', error);
+      
+      // Fall back to standard WebUI
+      sessionUrl = `${WEBUI_URL}/browser/${sessionId}`;
+      connectUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+      wsUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+      debugUrl = WEBUI_URL;
+    }
+  } else if (session.useBrowserbase) {
+    // Standard Browserbase mode
+    try {
+      // Try to use browserbase connector directly
       try {
         console.log('[Session Creation] Attempting to use Node.js Browserbase SDK');
         
