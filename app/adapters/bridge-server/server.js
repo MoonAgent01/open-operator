@@ -289,15 +289,16 @@ app.post('/intent', async (req, res) => {
           chrome_cdp: session.browserbaseConnectUrl || "" 
         };
 
+        // Modified to use the proper Gradio API endpoint format
         console.log('[Intent] Sending to Gradio API:', {
-          url: `${WEBUI_URL}/run_with_stream`,
+          url: `${WEBUI_URL}/api/predict`,
           body: gradioRequest
         });
 
         const requestBodyString = JSON.stringify(gradioRequest);
-        console.log(`[Intent] Sending fetch to ${WEBUI_URL}/run_with_stream with body: ${requestBodyString}`);
+        console.log(`[Intent] Sending fetch to ${WEBUI_URL}/api/predict with body: ${requestBodyString}`);
 
-        const webUiResponse = await fetch(`${WEBUI_URL}/run_with_stream`, {
+        const webUiResponse = await fetch(`${WEBUI_URL}/api/predict`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: requestBodyString

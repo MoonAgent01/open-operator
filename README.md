@@ -8,29 +8,50 @@ The system consists of three main components:
 
 1. **Open Operator Frontend** (Next.js, Port 3000)
    - Modern UI for interacting with the AI agent
-   - Includes a browser selection dropdown with two options:
-     - **"Native Browser"**: Uses Web UI's internal Chromium browser
-     - **"Browserbase"**: Uses Open Operator's internal browser environment
-   - Manages user sessions and task input
+   - Includes BrowserSelector component for explicit browser environment selection
+   - Uses Jotai atoms for consistent browser state management
+   - Real-time task execution monitoring
+   - WebSocket-based browser session management
 
 2. **Bridge Server** (Node.js + Express, Port 7789)
-   - Relays communications between Open Operator and Web UI
-   - Forwards tasks and browser preference flag from Open Operator to Web UI
-   - Passes execution results back to the frontend
+   - Unified communication layer between Open Operator and Web UI
+   - Handles browser selection with unified `useBrowserbase` flag
+   - Implements fallback mechanisms for browser initialization
+   - Manages session lifecycle and cleanup
+   - Comprehensive logging system for debugging
 
 3. **Web UI Backend** (Python, Port 7788)
    - Contains the AI agent logic and browser automation capabilities
-   - Executes tasks using either:
-     - Its own local Chromium browser (when "Native Browser" is selected)
-     - Open Operator's browser environment (when "Browserbase" is selected)
+   - Adapts to both internal and external browser control
+   - Supports dynamic browser environment switching
+   - Maintains session state and context
 
-## Browser Selection Logic
+## Browser Selection Flow
 
-The system is designed to provide flexibility in browser selection:
+The system uses a unified flag approach for browser selection:
 
-- **Native Browser**: When this option is selected, the `useBrowserbase: false` flag is set. The Bridge Server forwards the task to Web UI, which executes it using its default internal Chromium browser.
+### Frontend Selection
+1. User selects browser type via BrowserSelector component
+2. Selection stored in `browserTypeAtom` (Jotai state)
+3. ChatFeed component includes selection when creating sessions
 
-- **Browserbase**: When this option is selected, the `useBrowserbase: true` flag is set. The Bridge Server forwards the task to Web UI with special parameters that instruct Web UI to connect to and control Open Operator's browser environment rather than launching its own. This enables the Web UI agent to leverage Open Operator's browser capabilities.
+### API Layer
+1. Session API validates browser type
+2. Converts selection to unified `useBrowserbase` flag
+3. Constructs appropriate browser settings object
+4. Forwards to Bridge Server with complete configuration
+
+### Bridge Server
+1. Receives session creation request with `useBrowserbase` flag
+2. Creates session with appropriate browser context
+3. Implements fallback chain if primary method fails:
+   - Node.js SDK → Python Connector → WebUI
+4. Returns session details to frontend
+
+### WebUI Integration
+1. Receives configuration from Bridge Server
+2. Uses either internal browser or external control
+3. Maintains consistent behavior across both modes
 
 ## Quick Start
 
@@ -50,46 +71,123 @@ This launches:
 
 ### Frontend UI
 
-The Open Operator frontend provides:
-- Browser selection dropdown in the navigation bar
-- Task input field and execution controls
-- Live view of browser activity
-- Step-by-step agent progress display
+#### Browser Selection
+The BrowserSelector component (`app/components/BrowserSelector.tsx`) provides:
+- Clean, intuitive dropdown interface
+- Direct browser type selection
+- Immediate state updates via Jotai
+- Consistent type safety with BrowserType enum
+
+#### Task Execution
+The ChatFeed component (`app/components/ChatFeed.tsx`) handles:
+- Browser session creation with selected type
+- Real-time execution monitoring
+- Step-by-step progress display
+- Error state management
+- Session cleanup
 
 ### Bridge Server
 
-The Bridge Server (in `app/adapters/bridge-server`):
-- Manages communication between frontend and backend
-- Handles session creation with the appropriate browser flag
-- Forwards agent intent and execution commands
-- Processes results from the Web UI backend
+The Bridge Server unifies communication and implements:
+- Session management with browser context
+- Intent processing for agent actions
+- Execution command relay
+- Fallback mechanisms
+- Comprehensive logging
+
+## Logging System
+
+The system implements detailed logging throughout:
+
+### Frontend Logs
+```typescript
+[BrowserSelector] Changing browser type to: browserbase
+[ChatFeed] Creating session with browser type: browserbase
+```
+
+### API Logs
+```typescript
+[Session API] Creating session with browser type: browserbase
+[Session API] Using Browserbase: true
+```
+
+### Bridge Server Logs
+```typescript
+[Bridge Server] Creating session with browser type: browserbase
+[Bridge Server] Using Browserbase: true
+[Bridge Server] Browser type details: {...}
+```
 
 ## Troubleshooting
 
-If you encounter "Failed to handle intent" errors:
+### Common Issues
 
-1. **Check All Components**: Ensure all three components are running on their respective ports
-2. **Check Bridge Server Logic**: Verify the Bridge is forwarding requests to the correct Web UI endpoints
-3. **Verify Browser Selection**: Ensure the `useBrowserbase` flag is being properly passed from the frontend through to Web UI
-4. **Check Web UI Configuration**: Make sure Web UI supports external browser control when "Browserbase" is selected
+1. **Browser Selection Errors**
+   - Check browserTypeAtom state in React DevTools
+   - Verify BrowserSelector component is receiving updates
+   - Check browser type propagation in session creation
+
+2. **Session Creation Failures**
+   - Verify browser flag in session API request
+   - Check Bridge Server logs for fallback attempts
+   - Ensure WebUI is properly configured for external browser
+
+3. **Integration Issues**
+   - Confirm all three components are running
+   - Check port configurations
+   - Verify WebSocket connections
+   - Monitor browser process management
+
+### Debugging Tips
+
+1. **Frontend**
+   - Use React DevTools to inspect browserTypeAtom
+   - Check ChatFeed component state
+   - Monitor WebSocket connections
+
+2. **Bridge Server**
+   - Check session creation logs
+   - Monitor browser initialization attempts
+   - Review fallback mechanism triggers
+
+3. **WebUI**
+   - Verify browser control mode
+   - Check CDP connection details
+   - Monitor browser process status
 
 ## Development
 
-### Adding New Features
-
-To extend the integration:
-
-1. **Frontend**: Components are in `app/components`
-2. **API Routes**: Endpoints are in `app/api`
-3. **Bridge Logic**: Server code is in `app/adapters/bridge-server`
-
 ### Key Files
 
-- `app/atoms.ts`: Contains the `browserTypeAtom` that stores browser selection
-- `app/components/ChatFeed.tsx`: Manages task execution UI and calls API
-- `app/api/session/route.ts`: Creates sessions with the browser preference
-- `app/api/agent/route.ts`: Handles step-by-step agent execution
-- `app/adapters/bridge-server/server.js`: Core relay logic between Open Operator and Web UI
+#### Frontend
+- `app/atoms.ts`: Browser type management
+- `app/components/BrowserSelector.tsx`: Browser selection UI
+- `app/components/ChatFeed.tsx`: Task execution interface
+
+#### API Routes
+- `app/api/session/route.ts`: Session management
+- `app/api/agent/route.ts`: Agent execution
+
+#### Bridge Server
+- `app/adapters/bridge-server/server.js`: Core integration logic
+- `app/adapters/bridge-server/session-manager.js`: Session handling
+
+### Adding New Features
+
+1. **Frontend Changes**
+   - Add components to `app/components`
+   - Update atoms in `app/atoms.ts`
+   - Extend API routes in `app/api`
+
+2. **Bridge Server Extensions**
+   - Add endpoints to `server.js`
+   - Extend session management in `session-manager.js`
+   - Update browser handling logic
+
+3. **Integration Points**
+   - Update browser selection flow
+   - Extend logging system
+   - Add fallback mechanisms
 
 ## Port Configuration
 
@@ -98,4 +196,20 @@ Default ports:
 - Bridge Server: 7789
 - Open Operator Frontend: 3000
 
-These can be configured in the `restart-services.bat` file or directly in environment variables.
+Configure via environment variables or `restart-services.bat`.
+
+## Environment Variables
+
+```bash
+# Browser Selection
+BROWSER_TYPE=browserbase
+USE_BROWSERBASE=true
+
+# Ports
+WEBUI_PORT=7788
+BRIDGE_PORT=7789
+FRONTEND_PORT=3000
+
+# Logging
+LOG_LEVEL=debug
+ENABLE_DEBUG_LOGGING=true
