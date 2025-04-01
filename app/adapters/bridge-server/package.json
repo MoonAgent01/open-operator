@@ -8,8 +8,10 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "@browserbasehq/sdk": "^2.5.0",
+    "body-parser": "^1.20.2",
     "cors": "^2.8.5",
-    "body-parser": "^1.20.2"
+    "express": "^4.18.2",
+    "playwright-core": "^1.51.1"
   }
 }

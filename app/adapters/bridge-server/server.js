@@ -4,7 +4,9 @@ const { spawn } = require('child_process');
 const path = require('path');
 const bodyParser = require('body-parser');
 const sessionManager = require('./session-manager');
-const browserbaseConnector = require('./browserbase-connector');
+const browserbaseConnector = require('./browserbase-connector'); // Keep existing connector
+const Browserbase = require('@browserbasehq/sdk'); // Add Node.js SDK
+const { chromium } = require('playwright-core'); // Add Playwright for SDK
 
 const app = express();
 const PORT = process.env.PORT || 7789;
@@ -204,77 +206,119 @@ async function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
   const sessionId = `session-${Date.now()}`;
 
-  // Check if WebUI browser should be used
-  const useWebUIBrowser = req.body.settings?.useWebUIBrowser ||
-                         req.body.settings?.useOpenOperatorBrowser ||
-                         req.body.settings?.useNativeBrowser || false;
+  // --- Use the 'useBrowserbase' flag from settings ---
+  // Default to false if not provided
+  const useBrowserbase = req.body.settings?.useBrowserbase === true;
 
-  // Create session in session manager - when WebUI is used, we automatically use Browserbase features
-  const useBrowserbase = useWebUIBrowser; // Browserbase is enabled whenever WebUI is
+  console.log(`[Session Creation] useBrowserbase flag: ${useBrowserbase}`);
 
   // Create session in session manager
   const session = sessionManager.createSession(sessionId, {
     contextId: req.body.contextId || '',
-    useOpenOperatorBrowser: useWebUIBrowser,
-    useBrowserbase
+    // Store the definitive flag in the session manager
+    useBrowserbase: useBrowserbase,
+    // Deprecate useOpenOperatorBrowser if useBrowserbase is the primary flag
+    useOpenOperatorBrowser: useBrowserbase, // Keep this for backward compatibility
   });
 
   // Create session URL and connection details based on browser type
   let sessionUrl, connectUrl, wsUrl, debugUrl;
 
-  if (useWebUIBrowser) {
-    // If using WebUI Browser with Browserbase features
+  // --- Branch logic based on the useBrowserbase flag ---
+  if (useBrowserbase) {
+    // If using Browserbase mode
     try {
-      // Try to create a Browserbase session if the adapter is available
+      // First try the Node.js SDK approach (new intended logic)
       try {
-        console.log('[Session Creation] Using Browserbase for WebUI browser sessions');
-
-        const browserbaseSession = await browserbaseConnector.createSession({
-          headless: req.body.settings?.headless || false,
-          window_w: req.body.settings?.browserSettings?.windowSize?.width || 1366,
-          window_h: req.body.settings?.browserSettings?.windowSize?.height || 768
+        console.log('[Session Creation] Attempting to use Node.js Browserbase SDK');
+        
+        // Initialize the Browserbase SDK client
+        const bb = new Browserbase({
+          apiKey: process.env.BROWSERBASE_API_KEY || "not-needed-for-local",
         });
-
-        // Store Browserbase session ID in the session manager
+        
+        // Create a session using the SDK
+        const browserbaseSession = await bb.sessions.create({
+          projectId: process.env.BROWSERBASE_PROJECT_ID || "local",
+          // Add any additional configuration from request
+          // These would be specific to the Browserbase SDK
+        });
+        
+        // Store session data with flag indicating we're using Node.js SDK
         sessionManager.updateSession(sessionId, {
-          browserbaseSessionId: browserbaseSession.id
+          browserbaseSessionId: browserbaseSession.id,
+          browserbaseConnectUrl: browserbaseSession.connectUrl,
+          usingNodeSdk: true // Flag to indicate we're using the Node SDK
         });
+        
+        // Set connection details from SDK response
+        sessionUrl = browserbaseSession.sessionUrl || browserbaseSession.debugUrl || `http://localhost:3000/browser/${sessionId}`;
+        connectUrl = browserbaseSession.connectUrl || `ws://localhost:3000/ws`;
+        wsUrl = browserbaseSession.wsUrl || connectUrl;
+        debugUrl = browserbaseSession.debugUrl || 'http://localhost:3000';
+        
+        console.log('[Session Creation] Successfully created Browserbase session using Node.js SDK');
+        
+      } catch (nodeSdkError) {
+        // If Node.js SDK approach fails, fall back to existing connector
+        console.log('[Session Creation] Node.js SDK approach failed, trying existing connector as fallback:', nodeSdkError);
+        
+        try {
+          console.log('[Session Creation] Using Python connector for Browserbase');
+          
+          // Pass correct keys 'width' and 'height' expected by the connector's Python script
+          const browserbaseSession = await browserbaseConnector.createSession({
+            headless: req.body.settings?.headless || false,
+            width: req.body.settings?.browserSettings?.windowSize?.width || 1366, // Correct key
+            height: req.body.settings?.browserSettings?.windowSize?.height || 768 // Correct key
+          });
 
-        // Use Browserbase session URLs
-        sessionUrl = browserbaseSession.debug_url || `http://localhost:3000/browser/${sessionId}`;
-        connectUrl = browserbaseSession.connect_url || `ws://localhost:3000/ws`;
-        wsUrl = browserbaseSession.ws_url || `ws://localhost:3000/ws`;
-        debugUrl = browserbaseSession.debug_url || 'http://localhost:3000';
+          // Store Browserbase session ID in the session manager
+          sessionManager.updateSession(sessionId, {
+            browserbaseSessionId: browserbaseSession.id,
+            usingNodeSdk: false // Flag to indicate we're using the original connector
+          });
 
-        console.log('[Session Creation] Successfully created Browserbase session');
-      } catch (error) {
-        console.log('[Session Creation] Could not create Browserbase session, falling back to WebUI');
+          // Use Browserbase session URLs
+          sessionUrl = browserbaseSession.debug_url || `http://localhost:3000/browser/${sessionId}`;
+          connectUrl = browserbaseSession.connect_url || `ws://localhost:3000/ws`;
+          wsUrl = browserbaseSession.ws_url || `ws://localhost:3000/ws`;
+          debugUrl = browserbaseSession.debug_url || 'http://localhost:3000';
 
-        // Update session to indicate Browserbase is not available
-        sessionManager.updateSession(sessionId, {
-          useBrowserbase: false
-        });
+          console.log('[Session Creation] Successfully created Browserbase session using Python connector');
+        } catch (connectorError) {
+          // If both approaches fail, fall back to Web UI's native browser
+          console.error('[Session Creation] Both Node SDK and Python connector failed:', connectorError);
+          
+          // Update session to indicate Browserbase is not available
+          sessionManager.updateSession(sessionId, {
+            useBrowserbase: false
+          });
 
-        // Fall back to standard WebUI if Browserbase is not available
-        sessionUrl = `${WEBUI_URL}/browser/${sessionId}`;
-        connectUrl = `ws://localhost:${WEBUI_PORT}/ws`;
-        wsUrl = `ws://localhost:${WEBUI_PORT}/ws`;
-        debugUrl = WEBUI_URL;
+          // Fall back to standard WebUI if Browserbase is not available
+          sessionUrl = `${WEBUI_URL}/browser/${sessionId}`;
+          connectUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+          wsUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+          debugUrl = WEBUI_URL;
+          
+          console.log('[Session Creation] Falling back to WebUI native browser');
+        }
       }
     } catch (error) {
-      console.error('[Session Creation] WebUI error:', error);
-      // Fall back to default values if WebUI fails
+      console.error('[Session Creation] Unhandled error in Browserbase session creation:', error);
+      // Fall back to default values if all approaches fail
       sessionUrl = `http://localhost:3000/browser/${sessionId}`;
       connectUrl = `ws://localhost:3000/ws`;
       wsUrl = `ws://localhost:3000/ws`;
       debugUrl = 'http://localhost:3000';
     }
   } else {
-    // Native Open Operator browser (no WebUI)
-    sessionUrl = `http://localhost:3000/browser/${sessionId}`;
-    connectUrl = `ws://localhost:3000/ws`;
-    wsUrl = `ws://localhost:3000/ws`;
-    debugUrl = 'http://localhost:3000';
+    // Native Browser mode - forward directly to Web UI
+    console.log('[Session Creation] Using Native Browser logic (Web UI)');
+    sessionUrl = `${WEBUI_URL}/browser/${sessionId}`;
+    connectUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+    wsUrl = `ws://localhost:${WEBUI_PORT}/ws`;
+    debugUrl = WEBUI_URL;
   }
 
   // Send response with session info
@@ -349,6 +393,8 @@ app.post('/intent', async (req, res) => {
       // If using Open Operator browser with WebUI, delegate intent processing
       // This part might need adjustment based on how WebUI handles intent vs execution
       try {
+        const browserSession = session.browserbaseSessionId ? sessionManager.getSession(session.browserbaseSessionId) : null;
+        
         const gradioRequest = {
           agent_type: "org",               // Using org agent type
           llm_provider: "openai",          // LLM provider
@@ -357,7 +403,7 @@ app.post('/intent', async (req, res) => {
           llm_temperature: 0.7,            // Temperature
           llm_base_url: "",                // Base URL
           llm_api_key: "",                 // API key
-          use_own_browser: session.useOpenOperatorBrowser,  // Use Open Operator's browser when enabled
+          use_own_browser: session.useBrowserbase,  // Use external browser when Browserbase mode is enabled
           keep_browser_open: true,         // Keep browser open
           headless: false,                 // Headless mode
           disable_security: false,         // Disable security
@@ -372,7 +418,8 @@ app.post('/intent', async (req, res) => {
           max_steps: 1,                    // Max steps
           use_vision: false,               // Use vision
           max_actions_per_step: 1,         // Max actions per step
-          tool_calling_method: "auto"      // Tool calling method
+          tool_calling_method: "auto",     // Tool calling method
+          chrome_cdp: session.browserbaseConnectUrl || "" // Connect to Open Operator's browser using CDP URL
         };
 
         console.log('[Intent] Sending to Gradio API:', {
@@ -380,11 +427,17 @@ app.post('/intent', async (req, res) => {
           body: gradioRequest
         });
 
+        // Log the request before sending
+        const requestBodyString = JSON.stringify(gradioRequest);
+        console.log(`[Intent] Sending fetch to ${WEBUI_URL}/run_with_stream with body: ${requestBodyString}`);
+
         const webUiResponse = await fetch(`${WEBUI_URL}/run_with_stream`, { // Using correct endpoint
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(gradioRequest)
+          body: requestBodyString // Use the stringified body
         });
+
+        console.log(`[Intent] Received response from WebUI: Status ${webUiResponse.status}`); // Log status
 
         if (webUiResponse.ok) {
           const webUiData = await webUiResponse.json();
@@ -404,9 +457,18 @@ app.post('/intent', async (req, res) => {
                }
              });
           }
+        } else {
+           // Log non-OK response body if possible
+           const errorBody = await webUiResponse.text();
+           console.error(`[Intent] WebUI non-OK response body: ${errorBody}`);
         }
       } catch (error) {
-        console.error('[Intent] WebUI communication failed:', error);
+        // Log the full error object for fetch failures
+        console.error('[Intent] WebUI communication fetch failed:', {
+            message: error.message,
+            stack: error.stack,
+            cause: error.cause // Undici fetch errors often have a cause
+        });
         // Fall through to mock response if WebUI intent processing fails
       }
     }
@@ -577,88 +639,192 @@ app.post('/execute', async (req, res) => {
       console.log(`[Execute] Using Browserbase for session ${sessionId}`);
 
       const browserbaseSessionId = session.browserbaseSessionId;
-
-      try {
-        // Handle different tool types using Browserbase
-        let result;
-
-        switch(step.tool.toUpperCase()) {
-          case 'NAVIGATE':
-            result = await browserbaseConnector.navigate(
-              browserbaseSessionId,
-              step.args.url
-            );
-            break;
-
-          case 'CLICK':
-            result = await browserbaseConnector.click(
-              browserbaseSessionId,
-              step.args.selector || step.args.text
-            );
-            break;
-
-          case 'TYPE':
-            result = await browserbaseConnector.type(
-              browserbaseSessionId,
-              step.args.selector,
-              step.args.text
-            );
-            break;
-
-          case 'EXTRACT':
-            result = await browserbaseConnector.extract(
-              browserbaseSessionId,
-              step.args.selector
-            );
-            break;
-
-          case 'CLOSE':
-            await browserbaseConnector.closeSession(browserbaseSessionId);
-
-            // Get the goal/task from session context if available
-            const context = req.body.context || {};
-            const goal = context.goal || context.task || '';
-
-            if (goal) {
-              console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
-              sessionManager.markTaskCompleted(sessionId, goal);
-            }
-
-            return res.json({
-              success: true,
-              result: {
-                text: step.text || 'Browser closed',
-                reasoning: step.reasoning || 'Task completed',
-                instruction: step.instruction || 'Session closed'
+      
+      // Check if we're using the Node.js SDK or the Python connector
+      if (session.usingNodeSdk) {
+        try {
+          console.log(`[Execute] Using Node.js SDK for Browserbase session ${browserbaseSessionId}`);
+          
+          // Initialize the Browserbase SDK client
+          const bb = new Browserbase({
+            apiKey: process.env.BROWSERBASE_API_KEY || "not-needed-for-local",
+          });
+          
+          // Handle different tool types using the Node.js SDK
+          let result;
+          
+          switch(step.tool.toUpperCase()) {
+            case 'NAVIGATE':
+              // Use the SDK to navigate
+              result = await bb.browser.navigate({
+                sessionId: browserbaseSessionId,
+                url: step.args.url
+              });
+              break;
+              
+            case 'CLICK':
+              // Use the SDK to click
+              result = await bb.browser.click({
+                sessionId: browserbaseSessionId,
+                selector: step.args.selector || undefined,
+                text: step.args.text || undefined
+              });
+              break;
+              
+            case 'TYPE':
+              // Use the SDK to type
+              result = await bb.browser.type({
+                sessionId: browserbaseSessionId,
+                selector: step.args.selector,
+                text: step.args.text
+              });
+              break;
+              
+            case 'EXTRACT':
+              // Use the SDK to extract content
+              result = await bb.browser.extract({
+                sessionId: browserbaseSessionId,
+                selector: step.args.selector
+              });
+              break;
+              
+            case 'CLOSE':
+              // Close the session
+              await bb.sessions.close({
+                sessionId: browserbaseSessionId
+              });
+              
+              // Get the goal/task from session context if available
+              const context = req.body.context || {};
+              const goal = context.goal || context.task || '';
+              
+              if (goal) {
+                console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
+                sessionManager.markTaskCompleted(sessionId, goal);
               }
-            });
-
-          default:
-            return res.status(400).json({
-              success: false,
-              error: `Unsupported tool type for Browserbase: ${step.tool}`
-            });
-        }
-
-        // Return the result
-        return res.json({
-          success: true,
-          result: {
-            url: step.args.url || 'https://example.com',
-            content: '<html><body>Content from Browserbase</body></html>',
-            extraction: result,
-            text: step.text,
-            reasoning: step.reasoning,
-            instruction: step.instruction
+              
+              return res.json({
+                success: true,
+                result: {
+                  text: step.text || 'Browser closed',
+                  reasoning: step.reasoning || 'Task completed',
+                  instruction: step.instruction || 'Session closed'
+                }
+              });
+              
+            default:
+              return res.status(400).json({
+                success: false,
+                error: `Unsupported tool type for Browserbase SDK: ${step.tool}`
+              });
           }
-        });
-
-      } catch (error) {
-        console.error(`[Execute] Browserbase error:`, error);
-        return res.status(500).json({
-          success: false,
-          error: `Browserbase error: ${error.message}`
-        });
+          
+          // Return the result
+          return res.json({
+            success: true,
+            result: {
+              url: step.args.url || result.url || 'https://example.com',
+              content: result.content || '<html><body>Content from Browserbase SDK</body></html>',
+              extraction: result.extraction || result,
+              text: step.text,
+              reasoning: step.reasoning,
+              instruction: step.instruction
+            }
+          });
+          
+        } catch (error) {
+          console.error(`[Execute] Browserbase SDK error:`, error);
+          return res.status(500).json({
+            success: false,
+            error: `Browserbase SDK error: ${error.message}`
+          });
+        }
+      } else {
+        // Using the original Python connector
+        try {
+          console.log(`[Execute] Using Python connector for Browserbase session ${browserbaseSessionId}`);
+          
+          // Handle different tool types using Browserbase connector
+          let result;
+  
+          switch(step.tool.toUpperCase()) {
+            case 'NAVIGATE':
+              result = await browserbaseConnector.navigate(
+                browserbaseSessionId,
+                step.args.url
+              );
+              break;
+  
+            case 'CLICK':
+              result = await browserbaseConnector.click(
+                browserbaseSessionId,
+                step.args.selector || step.args.text
+              );
+              break;
+  
+            case 'TYPE':
+              result = await browserbaseConnector.type(
+                browserbaseSessionId,
+                step.args.selector,
+                step.args.text
+              );
+              break;
+  
+            case 'EXTRACT':
+              result = await browserbaseConnector.extract(
+                browserbaseSessionId,
+                step.args.selector
+              );
+              break;
+  
+            case 'CLOSE':
+              await browserbaseConnector.closeSession(browserbaseSessionId);
+  
+              // Get the goal/task from session context if available
+              const context = req.body.context || {};
+              const goal = context.goal || context.task || '';
+  
+              if (goal) {
+                console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
+                sessionManager.markTaskCompleted(sessionId, goal);
+              }
+  
+              return res.json({
+                success: true,
+                result: {
+                  text: step.text || 'Browser closed',
+                  reasoning: step.reasoning || 'Task completed',
+                  instruction: step.instruction || 'Session closed'
+                }
+              });
+  
+            default:
+              return res.status(400).json({
+                success: false,
+                error: `Unsupported tool type for Browserbase connector: ${step.tool}`
+              });
+          }
+  
+          // Return the result
+          return res.json({
+            success: true,
+            result: {
+              url: step.args.url || 'https://example.com',
+              content: '<html><body>Content from Browserbase connector</body></html>',
+              extraction: result,
+              text: step.text,
+              reasoning: step.reasoning,
+              instruction: step.instruction
+            }
+          });
+  
+        } catch (error) {
+          console.error(`[Execute] Browserbase connector error:`, error);
+          return res.status(500).json({
+            success: false,
+            error: `Browserbase connector error: ${error.message}`
+          });
+        }
       }
     } else if (session?.useOpenOperatorBrowser) {
       const webUIAvailable = await checkWebUIAvailability();
@@ -693,7 +859,8 @@ app.post('/execute', async (req, res) => {
               text: step.text
             },
             task,
-            use_own_browser: true, // Set to true to use Open Operator's browser
+            use_own_browser: session.useBrowserbase, // Use external browser if in Browserbase mode
+            chrome_cdp: session.browserbaseConnectUrl || "", // Pass CDP URL for external browser
             sessionId // Pass the sessionId to the bridge
           });
 
@@ -734,10 +901,11 @@ app.post('/execute', async (req, res) => {
           });
 
         } catch (error) {
-          console.error('[Execute] WebUI communication failed:', error);
-          console.error('Full error:', {
+          // Log the full error object for fetch failures
+          console.error('[Execute] WebUI communication failed:', {
             message: error.message,
-            stack: error.stack
+            stack: error.stack,
+            cause: error.cause // Undici fetch errors often have a cause
           });
           // Fall through to mock response on error
         }

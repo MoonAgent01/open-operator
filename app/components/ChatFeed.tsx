@@ -5,7 +5,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useWindowSize } from "usehooks-ts";
 import Image from "next/image";
 import { useAtom } from "jotai/react";
-import { contextIdAtom } from "../atoms";
+// Import BrowserType and browserTypeAtom
+import { contextIdAtom, BrowserType, browserTypeAtom } from "../atoms";
 import posthog from "posthog-js";
 interface ChatFeedProps {
   initialMessage?: string;
@@ -30,12 +31,16 @@ interface AgentState {
 
 export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
   const [isLoading, setIsLoading] = useState(false);
+  // Add state for initialization errors
+  const [initializationError, setInitializationError] = useState<string | null>(null);
   const { width } = useWindowSize();
   const isMobile = width ? width < 768 : false;
   const initializationRef = useRef(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const [isAgentFinished, setIsAgentFinished] = useState(false);
   const [contextId, setContextId] = useAtom(contextIdAtom);
+  // Use browserTypeAtom
+  const [browserType] = useAtom(browserTypeAtom);
   const agentStateRef = useRef<AgentState>({
     sessionId: null,
     sessionUrl: null,
@@ -82,18 +87,27 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
     scrollToBottom();
   }, [uiState.steps, scrollToBottom]);
 
+  // Add browserType, contextId, setContextId to dependency array
   useEffect(() => {
-    console.log("useEffect called");
+    console.log("[ChatFeed] useEffect triggered. Initializing session..."); // Add log
     const initializeSession = async () => {
-      if (initializationRef.current) return;
+      // Prevent double initialization
+      if (initializationRef.current) {
+        console.log("[ChatFeed] Initialization already attempted."); // Add log
+        return;
+      }
       initializationRef.current = true;
+      console.log(`[ChatFeed] Initial message: ${initialMessage}, Current session ID: ${agentStateRef.current.sessionId}`); // Add log
 
       if (initialMessage && !agentStateRef.current.sessionId) {
-        const useWebuiBrowser = typeof window !== 'undefined' && 
-          sessionStorage.getItem('useWebuiBrowser') === 'true';
-        
+        console.log("[ChatFeed] Conditions met for session creation."); // Add log
+        // Determine browser type from atom
+        // const useBrowserbase = browserType === BrowserType.Browserbase;
+        // Note: We send browserType directly now to the API route
+
         setIsLoading(true);
         try {
+              console.log("[ChatFeed] Sending request to /api/session..."); // Add log
               const sessionResponse = await fetch("/api/session", {
                 method: "POST",
                 headers: {
@@ -102,14 +116,20 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
                 body: JSON.stringify({
                   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                   contextId: contextId,
+                  // Send the browserType enum value to the API route
+                  browserType: browserType,
+                  // Settings might still be needed for other options
                   settings: {
-                    useWebUIBrowser: useWebuiBrowser
+                    // No need to send useWebUIBrowser or useBrowserbase here,
+                    // the API route determines it from browserType
                   }
                 }),
               });
           const sessionData = await sessionResponse.json();
+          console.log("[ChatFeed] Received response from /api/session:", sessionData); // Add log
 
           if (!sessionData.success) {
+            console.error("[ChatFeed] /api/session call failed:", sessionData.error); // Add log
             throw new Error(sessionData.error || "Failed to create session");
           }
 
@@ -301,8 +321,10 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
               }
             }
           }
-        } catch (error) {
+        } catch (error: any) { // Catch specific error
           console.error("Session initialization error:", error);
+          // Set the error state
+          setInitializationError(`Failed to initialize session: ${error.message}`);
         } finally {
           setIsLoading(false);
         }
@@ -310,7 +332,8 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
     };
 
     initializeSession();
-  }, [initialMessage]);
+    // Add dependencies to the array
+  }, [initialMessage, browserType, contextId, setContextId]);
 
   // Spring configuration for smoother animations
   const springConfig = {
@@ -348,10 +371,27 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      exit="exit"
-    >
-      <motion.nav
-        className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-200 shadow-sm"
+    exit="exit"
+  >
+    {/* Display error message if initialization failed */}
+    {initializationError && (
+       <div className="p-4 m-4 bg-red-100 border border-red-400 text-red-700 rounded">
+         <p className="font-bold">Initialization Error</p>
+         <p>{initializationError}</p>
+         <button
+           onClick={onClose}
+           className="mt-2 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+         >
+           Close
+         </button>
+       </div>
+    )}
+
+    {/* Only render the rest if no error occurred */}
+    {!initializationError && (
+      <>
+        <motion.nav
+          className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-200 shadow-sm"
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.2 }}
@@ -487,6 +527,9 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
           </div>
         </motion.div>
       </main>
+      {/* Remove the extra closing main tag */}
+      </>
+    )}
     </motion.div>
   );
 }

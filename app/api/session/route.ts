@@ -68,26 +68,51 @@ export async function GET(request: NextRequest) {
 /**
  * Create a new browser session
  */
+import { BrowserType } from "../../atoms"; // Import the enum
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const options = {
-      timezone: body.timezone || 'UTC',
-      contextId: body.contextId || '',
-      settings: body.settings || {
-        browserSettings: {
-          headless: false,
-          useExistingBrowser: false,
-          keepBrowserOpen: true,
-          keepBrowserOpenBetweenTasks: true,
-          windowSize: { width: 1366, height: 768 },
-          showBrowser: true,
-          useOwnBrowser: false
-        }
+
+    // --- Read browserType from request body ---
+    // Default to Browserbase if not provided or invalid
+    const browserType: BrowserType =
+      body.browserType === BrowserType.Native
+        ? BrowserType.Native
+        : BrowserType.Browserbase;
+
+    // --- Construct settings based on browserType ---
+    const useBrowserbase = browserType === BrowserType.Browserbase;
+
+    // Base settings, potentially overridden by client request body.settings
+    const defaultSettings = {
+      useBrowserbase: useBrowserbase, // Set the crucial flag for the bridge server
+      browserSettings: {
+        headless: false,
+        useExistingBrowser: false,
+        keepBrowserOpen: true,
+        keepBrowserOpenBetweenTasks: true,
+        windowSize: { width: 1366, height: 768 },
+        showBrowser: true,
+        useOwnBrowser: false // This might need adjustment depending on WebUI/Browserbase setup
       }
     };
 
-    console.log("Creating new session with options:", options);
+    // Merge default settings with any settings provided in the request body
+    const finalSettings = {
+      ...defaultSettings,
+      ...(body.settings || {}),
+      // Ensure useBrowserbase is correctly set based on the explicit browserType
+      useBrowserbase: useBrowserbase
+    };
+
+    const options = {
+      timezone: body.timezone || 'UTC',
+      contextId: body.contextId || '',
+      settings: finalSettings // Use the constructed settings
+    };
+
+    console.log(`Creating new session with browserType: ${browserType}, options:`, options);
     
     try {
       // Create session via bridge server

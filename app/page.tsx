@@ -7,7 +7,8 @@ import AnimatedButton from "./components/AnimatedButton";
 import Image from "next/image";
 import posthog from "posthog-js";
 import { useAtom } from "jotai";
-import { useWebuiBrowserAtom } from "./atoms";
+// Import the correct atom and enum
+import { browserTypeAtom, BrowserType } from "./atoms";
 
 const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }) => {
   return (
@@ -23,7 +24,8 @@ const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }
 export default function Home() {
   const [isChatVisible, setIsChatVisible] = useState(false);
   const [initialMessage, setInitialMessage] = useState("");
-  const [useWebuiBrowser, setUseWebuiBrowser] = useAtom(useWebuiBrowserAtom);
+  // Use the correct atom
+  const [browserType, setBrowserType] = useAtom(browserTypeAtom);
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
@@ -92,24 +94,18 @@ export default function Home() {
               <span className="font-ppsupply text-gray-900">Open Operator</span>
             </div>
             <div className="flex items-center gap-4">
+              {/* Restore the original dropdown selector */}
               <div className="flex items-center gap-2">
-                <span className="text-sm font-ppsupply text-gray-500">Browser Mode:</span>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    className="sr-only peer" 
-                    checked={useWebuiBrowser}
-                    onChange={(e) => {
-                      const newValue = e.target.checked;
-                      localStorage.setItem('useWebuiBrowser', newValue.toString());
-                      setUseWebuiBrowser(newValue);
-                    }}
-                  />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#FF3B00]"></div>
-                  <span className="ml-2 text-sm font-ppsupply text-gray-700">
-                    {isMounted ? (useWebuiBrowser ? 'WebUI Browser' : 'Native Browser') : 'Loading...'}
-                  </span>
-                </label>
+                <span className="text-sm font-ppsupply text-gray-500">Browser:</span>
+                <select
+                  className="ml-2 px-3 py-1.5 text-sm font-ppsupply text-gray-700 bg-white border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-[#FF3B00] focus:border-transparent"
+                  value={browserType} // Use browserType state
+                  onChange={(e) => setBrowserType(e.target.value as BrowserType)} // Update browserType state
+                >
+                  {/* Use enum members for values */}
+                  <option value={BrowserType.Browserbase}>Browserbase</option>
+                  <option value={BrowserType.Native}>Native Browser</option>
+                </select>
               </div>
 
               <a
@@ -163,10 +159,10 @@ export default function Home() {
                         ) as HTMLInputElement;
                         const message = (formData.get("message") as string).trim();
                         const finalMessage = message || input.placeholder;
-                        
-                        // Add session settings - now we just have a single setting
-                        sessionStorage.setItem("useWebuiBrowser", useWebuiBrowser.toString());
-                        
+
+                        // No need to manually set sessionStorage, atomWithStorage handles it
+                        // sessionStorage.setItem("browserType", browserType);
+
                         startChat(finalMessage);
                   }}
                   className="w-full max-w-[720px] flex flex-col items-center gap-3"

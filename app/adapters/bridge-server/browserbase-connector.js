@@ -67,133 +67,163 @@ async function runBrowserbaseScript(scriptName, args = {}) {
     
     // Create a temporary script that imports and uses the adapter
     const tempScriptPath = path.join(__dirname, '_temp_browserbase_script.py');
+    // Escape backticks and dollar signs in args for the template literal
+    const escapedArgs = JSON.stringify(args)
+                          .replace(/`/g, '\\`')
+                          .replace(/\$/g, '\\$');
     const scriptContent = `
 import sys
 import json
 import os
-from browserbase_adapter import Browserbase
+# Add adapter path to sys.path to ensure import works
+adapter_dir = r'${adapterPath.replace(/\\/g, '\\\\')}'
+if adapter_dir not in sys.path:
+    sys.path.insert(0, adapter_dir)
+# Also add the parent directory in case the adapter is structured differently
+parent_dir = os.path.dirname(adapter_dir)
+if parent_dir not in sys.path:
+	sys.path.insert(0, parent_dir)
+
+# Now try the import
+try:
+    from browserbase_adapter import Browserbase
+except ImportError:
+    # Fallback if structure is different, e.g., browserbase_adapter/browserbase.py
+    try:
+        from browserbase import Browserbase
+    except ImportError as e:
+        print(json.dumps({"success": False, "error": f"Failed to import Browserbase adapter: {e}, sys.path: {sys.path}"}))
+        sys.exit(1)
+
 
 def main():
     # Parse arguments
-    args = json.loads('''${JSON.stringify(args)}''')
-    
+    args = json.loads(r'''${escapedArgs}''')
+
     # Initialize Browserbase
     browser = Browserbase(api_key="not-needed")
-    
+
     # Execute the requested action
     if "${scriptName}" == "create_session":
         try:
             session = browser.create_session(
-                headless=args.get("headless", False),
+                headless=args.get('headless', False), # Use Python syntax
                 stealth={
-                    "enabled": True,
-                    "solveCaptchas": True
+                    "enabled": True, # Use Python syntax
+                    "solveCaptchas": True # Use Python syntax
                 },
                 viewport={
-                    "width": args.get("width", 1366),
-                    "height": args.get("height", 768)
+                    "width": args.get('width', 1366), # Use Python syntax
+                    "height": args.get('height', 768) # Use Python syntax
                 }
             )
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "session": session
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     elif "${scriptName}" == "close_session":
         try:
-            result = browser.close_session(args.get("sessionId"))
+            result = browser.close_session(args.get('sessionId')) # Use Python syntax
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "result": result
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     elif "${scriptName}" == "navigate":
         try:
             result = browser.open(
-                url=args.get("url"),
-                session_id=args.get("sessionId")
+                url=args.get('url'), # Use Python syntax
+                session_id=args.get('sessionId') # Use Python syntax
             )
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "result": result
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     elif "${scriptName}" == "click":
         try:
             # Execute JavaScript to find and click the element
-            script = """
-            function clickElement(selector) {
+            # Escape quotes within the JS string for Python
+            selector = args.get('selector', '').replace("'", "\\'")
+            script = f"""
+            function clickElement(selector) {{
                 const element = document.querySelector(selector);
-                if (element) {
+                if (element) {{
                     element.click();
-                    return true;
-                }
-                return false;
-            }
-            return clickElement('${args.get("selector", "")}');
+                    return true; // Use JS syntax
+                }}
+                return false; // Use JS syntax
+            }}
+            return clickElement('{selector}');
             """
             result = browser.execute_js(
                 script=script,
-                session_id=args.get("sessionId")
+                session_id=args.get('sessionId') # Use Python syntax
             )
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "result": result
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     elif "${scriptName}" == "type":
         try:
             # Execute JavaScript to type text into the element
-            script = """
-            function typeText(selector, text) {
+            # Escape quotes within the JS string for Python
+            selector = args.get('selector', '').replace("'", "\\'")
+            text = args.get('text', '').replace("'", "\\'")
+            script = f"""
+            function typeText(selector, text) {{
                 const element = document.querySelector(selector);
-                if (element) {
+                if (element) {{
                     element.value = text;
-                    return true;
-                }
-                return false;
-            }
-            return typeText('${args.get("selector", "")}', '${args.get("text", "")}');
+                    // Dispatch input event to trigger React state updates etc.
+                    element.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    return true; // Use JS syntax
+                }}
+                return false; // Use JS syntax
+            }}
+            return typeText('{selector}', '{text}');
             """
             result = browser.execute_js(
                 script=script,
-                session_id=args.get("sessionId")
+                session_id=args.get('sessionId') # Use Python syntax
             )
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "result": result
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     elif "${scriptName}" == "extract":
         try:
             # Get HTML content from the page
-            html = browser.get_html(session_id=args.get("sessionId"))
-            
+            html = browser.get_html(session_id=args.get('sessionId')) # Use Python syntax
+
             # Also execute JavaScript to get page title and text
             script = """
             return {
@@ -204,51 +234,51 @@ def main():
             """
             page_info = browser.execute_js(
                 script=script,
-                session_id=args.get("sessionId")
+                session_id=args.get('sessionId') # Use Python syntax
             )
-            
+
             # Combine the results
             result = {
                 "html": html,
-                "pageInfo": page_info.get("result", {})
+                "pageInfo": page_info.get('result', {}) # Use Python syntax
             }
-            
+
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "result": result
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     elif "${scriptName}" == "screenshot":
         try:
             screenshot = browser.screenshot(
-                session_id=args.get("sessionId"),
-                full_page=args.get("fullPage", False)
+                session_id=args.get('sessionId'), # Use Python syntax
+                full_page=args.get('fullPage', False) # Use Python syntax
             )
             print(json.dumps({
-                "success": True,
+                "success": True, # Use Python syntax
                 "screenshot": screenshot
             }))
         except Exception as e:
             print(json.dumps({
-                "success": False,
+                "success": False, # Use Python syntax
                 "error": str(e)
             }))
-    
+
     else:
         print(json.dumps({
-            "success": False,
+            "success": False, # Use Python syntax
             "error": f"Unknown action: ${scriptName}"
         }))
 
 if __name__ == "__main__":
     main()
     `;
-    
+
     fs.writeFileSync(tempScriptPath, scriptContent);
     
     // Run the script with Python
