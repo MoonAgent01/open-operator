@@ -9,17 +9,46 @@ const fs = require('fs');
 
 // Find Browserbase adapter location
 function findBrowserbaseAdapter() {
+  // Log current working directory to help with debugging
+  console.log(`[Browserbase] Current working directory: ${process.cwd()}`);
+  
+  // Add more specific paths to search
   const possiblePaths = [
     path.join(process.cwd(), '..', '..', '..', 'browserbase_adapter'),
     path.join(process.cwd(), '..', '..', 'browserbase_adapter'),
     path.join(process.cwd(), '..', 'browserbase_adapter'),
     path.join(process.cwd(), 'browserbase_adapter'),
-    path.join('D:', 'AI Agent', 'browserbase_adapter')
+    path.join('D:', 'AI Agent', 'browserbase_adapter'),
+    path.resolve('D:/AI Agent/browserbase_adapter'),
+    path.resolve('./browserbase_adapter'),
+    path.resolve('../browserbase_adapter'),
+    path.resolve('../../browserbase_adapter'),
+    path.resolve('../../../browserbase_adapter'),
+    path.resolve('../../../../browserbase_adapter'),
   ];
   
+  // Try to find the adapter by checking different file indicators
   for (const adapterPath of possiblePaths) {
+    // Check if directory exists first
+    if (!fs.existsSync(adapterPath)) {
+      continue;
+    }
+    
+    console.log(`[Browserbase] Checking path: ${adapterPath}`);
+    
+    // Check for different files that would indicate a valid adapter
     if (fs.existsSync(path.join(adapterPath, '__init__.py'))) {
-      console.log(`[Browserbase] Found adapter at ${adapterPath}`);
+      console.log(`[Browserbase] Found adapter at ${adapterPath} (via __init__.py)`);
+      return adapterPath;
+    }
+    
+    if (fs.existsSync(path.join(adapterPath, 'browserbase.py'))) {
+      console.log(`[Browserbase] Found adapter at ${adapterPath} (via browserbase.py)`);
+      return adapterPath;
+    }
+    
+    if (fs.existsSync(path.join(adapterPath, 'setup.py'))) {
+      console.log(`[Browserbase] Found adapter at ${adapterPath} (via setup.py)`);
       return adapterPath;
     }
   }

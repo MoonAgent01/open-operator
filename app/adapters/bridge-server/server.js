@@ -150,7 +150,7 @@ app.get('/health', async (req, res) => {
   try {
     const sessionId = req.query.sessionId;
     const session = sessionId ? sessionManager.getSession(sessionId) : null;
-    
+
     if (sessionId && !session) {
       return res.status(404).json({
         success: false,
@@ -174,7 +174,7 @@ app.get('/browserbase/health', async (req, res) => {
   try {
     // Check if Browserbase adapter is available
     const isAvailable = await browserbaseConnector.isAvailable();
-    
+
     res.json({
       success: true,
       available: isAvailable,
@@ -182,10 +182,10 @@ app.get('/browserbase/health', async (req, res) => {
     });
   } catch (error) {
     console.error(`Browserbase health check failed: ${error}`);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       available: false,
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -203,15 +203,15 @@ app.post('/session', (req, res) => {
 async function createSession(req, res) {
   console.log('[Session Creation] POST /session received:', req.body);
   const sessionId = `session-${Date.now()}`;
-  
+
   // Check if WebUI browser should be used
-  const useWebUIBrowser = req.body.settings?.useWebUIBrowser || 
-                         req.body.settings?.useOpenOperatorBrowser || 
+  const useWebUIBrowser = req.body.settings?.useWebUIBrowser ||
+                         req.body.settings?.useOpenOperatorBrowser ||
                          req.body.settings?.useNativeBrowser || false;
-  
+
   // Create session in session manager - when WebUI is used, we automatically use Browserbase features
   const useBrowserbase = useWebUIBrowser; // Browserbase is enabled whenever WebUI is
-  
+
   // Create session in session manager
   const session = sessionManager.createSession(sessionId, {
     contextId: req.body.contextId || '',
@@ -221,35 +221,40 @@ async function createSession(req, res) {
 
   // Create session URL and connection details based on browser type
   let sessionUrl, connectUrl, wsUrl, debugUrl;
-  
+
   if (useWebUIBrowser) {
     // If using WebUI Browser with Browserbase features
     try {
       // Try to create a Browserbase session if the adapter is available
       try {
         console.log('[Session Creation] Using Browserbase for WebUI browser sessions');
-        
+
         const browserbaseSession = await browserbaseConnector.createSession({
           headless: req.body.settings?.headless || false,
           window_w: req.body.settings?.browserSettings?.windowSize?.width || 1366,
           window_h: req.body.settings?.browserSettings?.windowSize?.height || 768
         });
-        
+
         // Store Browserbase session ID in the session manager
         sessionManager.updateSession(sessionId, {
           browserbaseSessionId: browserbaseSession.id
         });
-        
+
         // Use Browserbase session URLs
         sessionUrl = browserbaseSession.debug_url || `http://localhost:3000/browser/${sessionId}`;
         connectUrl = browserbaseSession.connect_url || `ws://localhost:3000/ws`;
         wsUrl = browserbaseSession.ws_url || `ws://localhost:3000/ws`;
         debugUrl = browserbaseSession.debug_url || 'http://localhost:3000';
-        
+
         console.log('[Session Creation] Successfully created Browserbase session');
       } catch (error) {
         console.log('[Session Creation] Could not create Browserbase session, falling back to WebUI');
-        
+
+        // Update session to indicate Browserbase is not available
+        sessionManager.updateSession(sessionId, {
+          useBrowserbase: false
+        });
+
         // Fall back to standard WebUI if Browserbase is not available
         sessionUrl = `${WEBUI_URL}/browser/${sessionId}`;
         connectUrl = `ws://localhost:${WEBUI_PORT}/ws`;
@@ -305,16 +310,16 @@ app.post('/intent', async (req, res) => {
     const sessionId = req.body.sessionId ||
                      (previousSteps.length > 0 ? previousSteps[0].sessionId : null);
     const session = sessionId ? sessionManager.getSession(sessionId) : null;
-    
+
     // Task hash for loop detection
     const taskHash = `${goal}`;
-    
+
     // Record task in history for pattern-based detection
     if (sessionId && previousSteps.length > 0) {
       const lastStep = previousSteps[previousSteps.length - 1];
       sessionManager.addTaskHistory(sessionId, lastStep);
     }
-    
+
     // Check for infinite loops using enhanced detection
     if (sessionManager.isLoopDetected(sessionId)) {
       console.log(`[Intent] Loop detected for session ${sessionId}, resetting task counter`);
@@ -324,7 +329,7 @@ app.post('/intent', async (req, res) => {
         error: 'Task loop detected - breaking cycle'
       });
     }
-    
+
     // Check if task has already been completed
     if (previousSteps.length > 1 && sessionManager.isTaskCompleted(sessionId, taskHash)) {
       console.log(`[Intent] Task already completed for session ${sessionId}: ${taskHash}`);
@@ -369,7 +374,7 @@ app.post('/intent', async (req, res) => {
           max_actions_per_step: 1,         // Max actions per step
           tool_calling_method: "auto"      // Tool calling method
         };
-        
+
         console.log('[Intent] Sending to Gradio API:', {
           url: `${WEBUI_URL}/run_with_stream`,
           body: gradioRequest
@@ -409,20 +414,49 @@ app.post('/intent', async (req, res) => {
     // Fallback to mock response if not using WebUI or if WebUI call failed
     let nextAction;
 
-    // For first steps, always navigate to Google
-    if (previousSteps.length === 0 || context.isFirstStep) {
-      nextAction = {
-        tool: 'NAVIGATE',
-        args: { url: 'https://google.com' },
-        text: 'Navigating to Google',
-        reasoning: 'Starting with Google to help fulfill this request',
-        instruction: 'Opening Google as the default starting point'
-      };
-    } else {
-      const lastStep = previousSteps[previousSteps.length - 1];
-      
-      // Generic flow based on previous step
-      switch (lastStep.tool.toUpperCase()) {
+    // Try WebUI first if enabled
+    if (session?.useOpenOperatorBrowser && previousSteps.length === 0) {
+      try {
+        // Try to delegate to WebUI agent
+        const result = await runPythonBridge('execute_step', {
+          task: goal,
+          step: {
+            tool: 'NAVIGATE',
+            args: {},
+            text: `Handle this request: ${goal}`
+          },
+          use_own_browser: true
+        });
+
+        if (result && result.success && result.browserView) {
+          // WebUI agent handled it successfully, parse its response
+          const stepResult = result.actions ? JSON.parse(result.actions) : null;
+          if (stepResult && stepResult.tool) {
+            nextAction = stepResult;
+          }
+        }
+      } catch (error) {
+        console.error('[Intent] WebUI delegation failed:', error);
+      }
+    }
+
+    // If WebUI didn't handle it or we're in a multi-step sequence
+    if (!nextAction) {
+      // If this is the first step, start with Google
+      if (previousSteps.length === 0) {
+        nextAction = {
+          tool: 'NAVIGATE',
+          args: { url: 'https://google.com' },
+          text: 'Navigating to Google',
+          reasoning: 'Starting with Google as fallback strategy',
+          instruction: 'Opening Google to help process request'
+        };
+      } else {
+        // Handle subsequent steps based on previous action
+        const lastStep = previousSteps[previousSteps.length - 1];
+        
+        // Generic flow based on previous step
+        switch (lastStep.tool.toUpperCase()) {
         case 'NAVIGATE':
           nextAction = {
             tool: 'EXTRACT',
@@ -432,7 +466,7 @@ app.post('/intent', async (req, res) => {
             instruction: 'Analyze the page content'
           };
           break;
-          
+
         case 'EXTRACT':
           // For Google, look for the search box
           nextAction = {
@@ -445,7 +479,7 @@ app.post('/intent', async (req, res) => {
             instruction: 'Click on the search box'
           };
           break;
-          
+
         case 'CLICK':
           // If we just clicked, we probably want to type something
           nextAction = {
@@ -459,7 +493,7 @@ app.post('/intent', async (req, res) => {
             instruction: 'Type the search query'
           };
           break;
-          
+
         case 'TYPE':
           // After typing in a search box, click search button
           nextAction = {
@@ -472,7 +506,7 @@ app.post('/intent', async (req, res) => {
             instruction: 'Click the search button'
           };
           break;
-          
+
         default:
           // Final step - close the session
           nextAction = {
@@ -482,6 +516,7 @@ app.post('/intent', async (req, res) => {
             reasoning: 'Task steps completed',
             instruction: 'Close the current browser session'
           };
+        }
       }
     }
 
@@ -517,10 +552,10 @@ app.post('/execute', async (req, res) => {
         error: `Session ${sessionId} not found`
       });
     }
-    
+
     // Add step to task history for loop detection
     sessionManager.addTaskHistory(sessionId, step);
-    
+
     // Check for infinite loops during execution
     if (sessionManager.isLoopDetected(sessionId)) {
       console.log(`[Execute] Loop detected for session ${sessionId} during execution, forcing CLOSE`);
@@ -538,36 +573,30 @@ app.post('/execute', async (req, res) => {
     }
 
     // Determine which browser implementation to use
-    if (session?.useBrowserbase) {
+    if (session?.useBrowserbase && session.browserbaseSessionId) {
       console.log(`[Execute] Using Browserbase for session ${sessionId}`);
-      
+
       const browserbaseSessionId = session.browserbaseSessionId;
-      if (!browserbaseSessionId) {
-        return res.status(400).json({
-          success: false,
-          error: `Browserbase session ID not found for session ${sessionId}`
-        });
-      }
-      
+
       try {
         // Handle different tool types using Browserbase
         let result;
-        
+
         switch(step.tool.toUpperCase()) {
           case 'NAVIGATE':
             result = await browserbaseConnector.navigate(
-              browserbaseSessionId, 
+              browserbaseSessionId,
               step.args.url
             );
             break;
-            
+
           case 'CLICK':
             result = await browserbaseConnector.click(
               browserbaseSessionId,
               step.args.selector || step.args.text
             );
             break;
-            
+
           case 'TYPE':
             result = await browserbaseConnector.type(
               browserbaseSessionId,
@@ -575,26 +604,26 @@ app.post('/execute', async (req, res) => {
               step.args.text
             );
             break;
-            
+
           case 'EXTRACT':
             result = await browserbaseConnector.extract(
               browserbaseSessionId,
               step.args.selector
             );
             break;
-            
+
           case 'CLOSE':
             await browserbaseConnector.closeSession(browserbaseSessionId);
-            
+
             // Get the goal/task from session context if available
             const context = req.body.context || {};
             const goal = context.goal || context.task || '';
-            
+
             if (goal) {
               console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
               sessionManager.markTaskCompleted(sessionId, goal);
             }
-            
+
             return res.json({
               success: true,
               result: {
@@ -603,14 +632,14 @@ app.post('/execute', async (req, res) => {
                 instruction: step.instruction || 'Session closed'
               }
             });
-            
+
           default:
             return res.status(400).json({
               success: false,
               error: `Unsupported tool type for Browserbase: ${step.tool}`
             });
         }
-        
+
         // Return the result
         return res.json({
           success: true,
@@ -623,7 +652,7 @@ app.post('/execute', async (req, res) => {
             instruction: step.instruction
           }
         });
-        
+
       } catch (error) {
         console.error(`[Execute] Browserbase error:`, error);
         return res.status(500).json({
@@ -657,7 +686,7 @@ app.post('/execute', async (req, res) => {
           }
 
           // Use gradio_bridge.py to execute the step
-          const result = await runPythonBridge('execute_step', { 
+          const result = await runPythonBridge('execute_step', {
             step: {
               tool: step.tool,
               args: step.args,
@@ -675,7 +704,7 @@ app.post('/execute', async (req, res) => {
           }
 
           // Check if the task has been completed from the WebUI response
-          const isDone = 
+          const isDone =
             (result.finalResult && result.finalResult.toLowerCase().includes('complet')) ||
             (result.thoughts && result.thoughts.toLowerCase().includes('complet')) ||
             step.tool.toUpperCase() === 'DONE';
@@ -684,13 +713,13 @@ app.post('/execute', async (req, res) => {
           if (isDone || step.tool.toUpperCase() === 'CLOSE') {
             const context = req.body.context || {};
             const goal = context.goal || context.task || '';
-            
+
             if (goal) {
               console.log(`[Execute] WebUI marked task as completed for session ${sessionId}: ${goal}`);
               sessionManager.markTaskCompleted(sessionId, goal);
             }
           }
-          
+
           // Process the response from gradio_bridge.py
           return res.json({
             success: true,
@@ -699,7 +728,7 @@ app.post('/execute', async (req, res) => {
               content: result.browserView || '<html><body>Content N/A</body></html>',
               extraction: result.extraction || {},
               text: result.finalResult || step.text,
-              reasoning: result.thoughts || step.reasoning, 
+              reasoning: result.thoughts || step.reasoning,
               instruction: step.instruction
             }
           });
@@ -721,20 +750,20 @@ app.post('/execute', async (req, res) => {
 
     // Fallback to mock if Web UI not selected or failed
     const mockResult = mockBrowserResponse(step.tool.toLowerCase(), step.args);
-    
+
     // Handle task completion for terminal actions
-    if (step.tool.toUpperCase() === 'CLOSE' || 
+    if (step.tool.toUpperCase() === 'CLOSE' ||
         (step.text && step.text.toLowerCase().includes('complet'))) {
       // Get the goal/task from session context if available
       const context = req.body.context || {};
       const goal = context.goal || context.task || '';
-      
+
       if (goal) {
         console.log(`[Execute] Marking task as completed for session ${sessionId}: ${goal}`);
         sessionManager.markTaskCompleted(sessionId, goal);
       }
     }
-    
+
     res.json({
       success: true,
       result: {
@@ -794,8 +823,8 @@ app.post('/api/sessions/:sessionId/agent/run', async (req, res) => {
       });
     }
 
-    const result = await runPythonBridge('run_agent', { 
-      task, 
+    const result = await runPythonBridge('run_agent', {
+      task,
       sessionId,
       use_own_browser: session.useOpenOperatorBrowser
     });
@@ -835,53 +864,42 @@ app.post('/api/sessions/:sessionId/navigate', (req, res) => {
   });
 });
 
-// Delete session
+// Delete session (Simplified for debugging)
 app.delete('/session', async (req, res) => {
-  const { sessionId } = req.body;
+  try {
+    const { sessionId } = req.body;
+    console.log(`[Session Debug] Received request to delete session ${sessionId}`);
 
-  console.log(`[Session] Closing session ${sessionId}`);
-
-  const session = sessionManager.getSession(sessionId);
-  if (!session) {
-    return res.status(404).json({
-      success: false,
-      error: `Session ${sessionId} not found`
-    });
-  }
-
-    try {
-      if (session?.useBrowserbase) {
-        // If using Browserbase, close the Browserbase session
-        const browserbaseSessionId = session.browserbaseSessionId;
-        if (browserbaseSessionId) {
-          try {
-            await browserbaseConnector.closeSession(browserbaseSessionId);
-            console.log(`[Session] Closed Browserbase session ${browserbaseSessionId}`);
-          } catch (error) {
-            console.error('[Session] Browserbase cleanup failed:', error);
-          }
-        }
-      } else if (session?.useOpenOperatorBrowser && await checkWebUIAvailability()) {
-      try {
-        // Notify Web UI to clean up session if available
-        await fetch(`${WEBUI_API_URL}/agent/close`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId })
-        });
-      } catch (error) {
-        console.error('[Session] WebUI cleanup failed (non-critical):', error);
+    // Minimal logic: Just delete from manager if exists
+    const session = sessionManager.getSession(sessionId);
+    if (session) {
+      sessionManager.deleteSession(sessionId);
+      console.log(`[Session Debug] Deleted session ${sessionId} from manager.`);
+    } else {
+      console.log(`[Session Debug] Session ${sessionId} not found.`);
+      // Send 404 if not found and headers not sent
+      if (!res.headersSent) {
+        return res.status(404).json({ success: false, error: `Session ${sessionId} not found` });
       }
+      return; // Stop if not found
     }
 
-    sessionManager.deleteSession(sessionId);
-    res.json({ success: true, message: 'Session closed successfully' });
+    // Send success response if headers not already sent
+    if (!res.headersSent) {
+      res.json({ success: true, message: 'Session closed successfully (debug mode)' });
+    }
   } catch (error) {
-    console.error(`[Session] Error closing session: ${error}`);
-    res.status(500).json({
-      success: false,
-      error: `Error closing session: ${error.message}`
+    console.error(`[Session Debug] Error during simplified deletion for session ${req.body?.sessionId}:`, {
+      message: error.message,
+      stack: error.stack
     });
+    // Attempt to send an error response if none has been sent yet
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: `Internal server error during session closure: ${error.message}`
+      });
+    }
   }
 });
 
