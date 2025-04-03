@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Bridge server for Open Operator and WebUI integration",
   "main": "server.js",
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },

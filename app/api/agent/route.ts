@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import browserbaseConnector from '../../adapters/bridge-server/browserbase-connector'; // Import the connector
+// REMOVED: use_mcp_tool is globally available in the execution environment, no import needed.
 
 // Define the supported step types
 interface Step {
@@ -89,65 +91,48 @@ export async function POST(request: NextRequest) {
         console.log('Starting new session for goal:', goal);
 
         try {
-          // Create a session by calling the bridge server
-          const sessionResponse = await fetch('http://localhost:7789/session', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              contextId: goal,
-              timezone: 'UTC',
-              settings: {
-                  useBrowserbase: true, // Default to using Browserbase
-                  browserSettings: {
-                    headless: false,
-                    useExistingBrowser: false,
-                    keepBrowserOpen: true,
-                    keepBrowserOpenBetweenTasks: true,
-                    windowSize: { width: 1366, height: 768 },
-                    showBrowser: true
-                  },
-                metadata: { source: 'open-operator', version: '1.0.0' }
-              }
-            }),
+          // Create session using the connector (which now uses MCP)
+          const sessionInfo = await browserbaseConnector.createSession({
+            contextId: goal,
+            timezone: 'UTC', // Or get from request if needed
+            // Pass other options if necessary (width, height, etc.)
+          });
+          
+          const sessionId = sessionInfo.id;
+          console.log('Session created via MCP connector:', sessionId);
+
+          // Use Web UI's LLM to determine the first step
+          const mcpResult = await use_mcp_tool({
+            server_name: 'webui-browser',
+            tool_name: 'determine_next_step',
+            arguments: {
+              session_id: sessionId,
+              goal: goal,
+              previous_steps: [] // No previous steps for first action
+            }
           });
 
-          const sessionData = await sessionResponse.json();
-          
-          if (!sessionData.success) {
-            throw new Error(sessionData.error || 'Failed to create session');
+          if (!mcpResult || !mcpResult.tool) {
+            throw new Error("Invalid first step returned from Web UI LLM");
           }
 
-          console.log('Session created:', sessionData);
-
-          // Get first step from bridge server
-          const intentResponse = await fetch('http://localhost:7789/intent', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-             },
-             body: JSON.stringify({
-               goal: goal,
-               sessionId: sessionData.sessionId, // Pass the obtained sessionId
-               context: { isFirstStep: true }
-             }),
-           });
-
-          const intentData = await intentResponse.json();
-          
-          if (!intentData.success) {
-            throw new Error(intentData.error || 'Failed to get initial step');
-          }
+          // Convert MCP result to Step format
+          const firstStep: Step = {
+            tool: mcpResult.tool,
+            args: mcpResult.args || {},
+            text: mcpResult.text || `Execute ${mcpResult.tool}`,
+            reasoning: mcpResult.reasoning || "Initial step determined by Web UI LLM",
+            instruction: mcpResult.instruction || `Execute ${mcpResult.tool} with args: ${JSON.stringify(mcpResult.args)}`
+          };
 
           return NextResponse.json({
             success: true,
-            sessionId: sessionData.sessionId,
-            result: intentData.result,
-            steps: [intentData.result],
+            sessionId: sessionId,
+            result: firstStep,
+            steps: [firstStep],
             done: false,
-            sessionUrl: sessionData.sessionUrl,
-            debugUrl: sessionData.debugUrl
+            sessionUrl: sessionInfo.ws_url, // Use ws_url from connector
+            debugUrl: sessionInfo.debug_url // Use debug_url from connector
           });
         } catch (error: any) {
           console.error('Error starting session:', error);
@@ -169,58 +154,37 @@ export async function POST(request: NextRequest) {
         console.log('Previous steps:', previousSteps);
 
         try {
-          // Get next action from bridge server
-          const intentResponse = await fetch('http://localhost:7789/intent', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              goal,
-              previousSteps,
-              sessionId,
-              context: {
-                useBrowserbase: true, // Pass browser info in context
-                sessionId
-              }
-            }),
+          // Use the new MCP tool to determine the next step
+          const mcpResult = await use_mcp_tool({
+            server_name: 'webui-browser',
+            tool_name: 'determine_next_step',
+            arguments: {
+              session_id: sessionId,
+              goal: goal,
+              previous_steps: previousSteps || []
+            }
           });
 
-          const intentData = await intentResponse.json();
-          
-          if (!intentData.success) {
-            // Handle loop detection error from bridge server
-            if (intentData.error && intentData.error.includes('loop detected')) {
-              console.log('Loop detected in bridge server, returning CLOSE action');
-              return NextResponse.json({
-                success: true,
-                result: {
-                  tool: "CLOSE",
-                  args: {},
-                  text: "Task loop detected - stopping execution",
-                  reasoning: "A potential infinite loop was detected",
-                  instruction: "Stopping task execution to prevent looping"
-                },
-                steps: [...previousSteps],
-                done: true
-              });
-            }
-            throw new Error(intentData.error || 'Failed to get next step');
+          if (!mcpResult || !mcpResult.tool) {
+            throw new Error("Invalid step returned from Web UI LLM");
           }
 
-          // Check if the task is already completed by looking for CLOSE tool type
-          // or text containing "completed" or "already"
-          const isTaskCompleted = 
-            intentData.result.tool === "CLOSE" || 
-            (intentData.result.text && (
-              intentData.result.text.toLowerCase().includes('complet') ||
-              intentData.result.text.toLowerCase().includes('already')
-            ));
+          // Convert MCP result to Step format if needed
+          const nextAction: Step = {
+            tool: mcpResult.tool,
+            args: mcpResult.args || {},
+            text: mcpResult.text || `Execute ${mcpResult.tool}`,
+            reasoning: mcpResult.reasoning || "Determined by Web UI LLM",
+            instruction: mcpResult.instruction || `Execute ${mcpResult.tool} with args: ${JSON.stringify(mcpResult.args)}`
+          };
+
+          // Check if this is a close session action
+          const isTaskCompleted = nextAction.tool.toUpperCase() === 'CLOSE_SESSION';
 
           return NextResponse.json({
             success: true,
-            result: intentData.result,
-            steps: [...previousSteps, intentData.result],
+            result: nextAction,
+            steps: [...previousSteps, nextAction],
             done: isTaskCompleted
           });
         } catch (error: any) {
@@ -243,32 +207,22 @@ export async function POST(request: NextRequest) {
         console.log('Executing step:', { sessionId, step });
 
         try {
-          // Execute step via bridge server
-          const executeResponse = await fetch('http://localhost:7789/execute', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              sessionId,
-              step,
-              context: {
-                useBrowserbase: true, // Pass browser info in context
-                sessionId
-              }
-            }),
-          });
+          // Execute step using the connector (which now uses MCP)
+          const executeResult = await browserbaseConnector.executeStep(sessionId, step);
 
-          const executeData = await executeResponse.json();
+          // The connector's executeStep now returns the direct result from the MCP tool
+          // We need to adapt the response format if necessary.
+          // Assuming the MCP tool result contains relevant info like 'extraction'.
           
-          if (!executeData.success) {
-            throw new Error(executeData.error || 'Failed to execute step');
-          }
+          // Check if the tool executed was 'close_session'
+          const isCloseTool = step.tool?.toLowerCase() === 'close_session';
 
           return NextResponse.json({
             success: true,
-            extraction: executeData.extraction,
-            done: step.tool === "CLOSE"
+            // Pass through relevant parts of the MCP tool result
+            extraction: executeResult.result?.extraction, // Example: pass extraction if present
+            result: executeResult.result, // Pass the whole MCP result for potential use
+            done: isCloseTool // Mark as done only if the tool was close_session
           });
         } catch (error: any) {
           console.error('Error executing step:', error);

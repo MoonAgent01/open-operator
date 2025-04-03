@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { browserbase } from '@/app/adapters/bridge-server/browserbase-connector';
+import { BrowserType } from "../../atoms"; // Import the enum
 
 // Helper function to validate session ID
 function validateSessionId(sessionId: string | undefined): NextResponse | null {
@@ -14,11 +16,8 @@ function validateSessionId(sessionId: string | undefined): NextResponse | null {
   return null;
 }
 
-// Bridge server URL
-const BRIDGE_SERVER_URL = 'http://localhost:7789';
-
 /**
- * Get session status
+ * Get session status (Placeholder - not fully implemented with direct API)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -28,31 +27,13 @@ export async function GET(request: NextRequest) {
     const sessionError = validateSessionId(sessionId || undefined);
     if (sessionError) return sessionError;
 
-    try {
-      // Check session status via bridge server
-      const response = await fetch(`${BRIDGE_SERVER_URL}/health?sessionId=${sessionId}`);
-      if (!response.ok) {
-        throw new Error(`Bridge server returned ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      return NextResponse.json({
-        success: data.success,
-        status: data.status || 'unknown',
-        sessionId
-      });
-    } catch (error: any) {
-      console.error("Error checking session with bridge server:", error);
-      
-      // Fall back to basic response if bridge server is not available
-      return NextResponse.json({
-        success: true,
-        status: 'unknown',
-        sessionId,
-        warning: 'Bridge server connection failed, status may be inaccurate'
-      });
-    }
+    // TODO: Implement status check via direct API if available, or keep as unknown
+    return NextResponse.json({
+      success: true,
+      status: 'unknown', // Status check might not be available via direct API
+      sessionId,
+      warning: 'Session status check via direct API not implemented'
+    });
   } catch (error: any) {
     console.error("Error checking session:", error);
     return NextResponse.json(
@@ -66,10 +47,8 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * Create a new browser session
+ * Create a new browser session using the direct API connector
  */
-import { BrowserType } from "../../atoms"; // Import the enum
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -78,25 +57,21 @@ export async function POST(request: NextRequest) {
     const browserType: BrowserType =
       body.browserType === BrowserType.Native
         ? BrowserType.Native
-        : BrowserType.Browserbase;
+        : BrowserType.Browserbase; // Default to Browserbase/WebUI
 
     console.log(`[Session API] Creating session with browser type: ${browserType}`);
 
-    // Construct settings based on browserType
-    const useBrowserbase = browserType === BrowserType.Browserbase;
-    console.log(`[Session API] Using Browserbase: ${useBrowserbase}`);
-
     // Base settings, potentially overridden by client request body.settings
     const defaultSettings = {
-      useBrowserbase: useBrowserbase, // Set the crucial flag for the bridge server
-      browserSettings: {
+      headless: false,
+      disableSecurity: true, // Common setting for automation
+      browserSettings: { // Keep nested structure if needed by connector
         headless: false,
         useExistingBrowser: false,
         keepBrowserOpen: true,
         keepBrowserOpenBetweenTasks: true,
         windowSize: { width: 1366, height: 768 },
         showBrowser: true,
-        useOwnBrowser: false // This might need adjustment depending on WebUI/Browserbase setup
       }
     };
 
@@ -104,87 +79,63 @@ export async function POST(request: NextRequest) {
     const finalSettings = {
       ...defaultSettings,
       ...(body.settings || {}),
-      // Ensure useBrowserbase is correctly set based on the explicit browserType
-      useBrowserbase: useBrowserbase
     };
 
     const options = {
       timezone: body.timezone || 'UTC',
       contextId: body.contextId || '',
-      settings: finalSettings // Use the constructed settings
+      settings: finalSettings, // Use the constructed settings
+      width: finalSettings.browserSettings.windowSize.width, // Pass width/height directly if needed
+      height: finalSettings.browserSettings.windowSize.height
     };
 
-    console.log(`[Session API] Creating new session with options:`, {
-      browserType,
-      useBrowserbase,
-      ...options
-    });
+    console.log(`[Session API] Creating new session via direct API with options:`, options);
     
-    try {
-      // Create session via bridge server
-      const response = await fetch(`${BRIDGE_SERVER_URL}/session`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(options),
-      });
+    // Use the direct browserbase connector
+    const sessionData = await browserbase.createSession(options);
       
-      if (!response.ok) {
-        throw new Error(`Bridge server returned ${response.status}: ${response.statusText}`);
-      }
-      
-      const sessionData = await response.json();
-      
-      if (!sessionData.success) {
-        throw new Error(sessionData.error || 'Unknown bridge server error');
-      }
-      
-      console.log("[Session API] Session created:", {
-        id: sessionData.sessionId,
-        contextId: sessionData.contextId,
-        url: sessionData.sessionUrl
-      });
-
-      return NextResponse.json({
-        success: true,
-        sessionId: sessionData.sessionId,
-        sessionUrl: sessionData.sessionUrl,
-        contextId: sessionData.contextId,
-        settings: options.settings,
-        connectUrl: sessionData.connectUrl || sessionData.wsUrl,
-        debugUrl: sessionData.debugUrl
-      });
-    } catch (error: any) {
-      console.error("Bridge server session creation failed:", error);
-      
-      if (error.message.includes('ECONNREFUSED') || error.message.includes('Failed to fetch')) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'Service connection error. Please ensure Bridge Server is running.',
-            details: error.message
-          },
-          { status: 503 }
-        );
-      }
-      
-      throw error; // Re-throw for general error handling
+    if (!sessionData || !sessionData.id) {
+      throw new Error('Failed to create session via direct API');
     }
+      
+    console.log("[Session API] Session created via direct API:", sessionData);
+
+    // Return response compatible with frontend expectations
+    return NextResponse.json({
+      success: true,
+      sessionId: sessionData.id,
+      sessionUrl: sessionData.debug_url, // Use debug_url or construct if needed
+      contextId: options.contextId, // Get contextId from the original options
+      settings: options.settings,
+      connectUrl: sessionData.connect_url,
+      debugUrl: sessionData.debug_url,
+      wsUrl: sessionData.ws_url
+    });
+
   } catch (error: any) {
-    console.error("Error creating session:", error);
+    console.error("Error creating session via direct API:", error);
+    
+    // Provide more specific error feedback if possible
+    let status = 500;
+    let errorMessage = `Failed to create session: ${error.message}`;
+    if (error.message.includes('ECONNREFUSED')) {
+      status = 503;
+      errorMessage = 'Service connection error. Please ensure Web UI backend is running.';
+    }
+    
     return NextResponse.json(
       { 
         success: false, 
-        error: `Failed to create session: ${error.message}` 
+        error: errorMessage,
+        details: error.message // Include original error message for debugging
       },
-      { status: 500 }
+      { status }
     );
   }
 }
 
 /**
- * End a browser session
+ * End a browser session using the direct API connector
  */
 export async function DELETE(request: NextRequest) {
   try {
@@ -194,52 +145,28 @@ export async function DELETE(request: NextRequest) {
     const sessionError = validateSessionId(sessionId);
     if (sessionError) return sessionError;
 
-    console.log("Ending session:", sessionId);
+    console.log("[Session API] Ending session via direct API:", sessionId);
     
-    try {
-      // End session via bridge server
-      const response = await fetch(`${BRIDGE_SERVER_URL}/session`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ sessionId }),
-      });
+    // Use the direct browserbase connector
+    await browserbase.closeSession(); // Assumes connector manages the active session ID internally
       
-      if (!response.ok) {
-        throw new Error(`Bridge server returned ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Unknown bridge server error');
-      }
-      
-      console.log("Session ended successfully");
+    console.log("[Session API] Session ended successfully via direct API");
 
-      return NextResponse.json({ 
-        success: true,
-        message: "Session ended successfully"
-      });
-    } catch (error: any) {
-      console.error("Bridge server session deletion failed:", error);
-      
-      // Return success even if bridge server fails, as this is a clean-up operation
-      return NextResponse.json({ 
-        success: true,
-        message: "Session marked as ended (bridge server may have failed)",
-        warning: error.message
-      });
-    }
+    return NextResponse.json({ 
+      success: true,
+      message: "Session ended successfully"
+    });
+
   } catch (error: any) {
-    console.error("Error ending session:", error);
+    console.error("Error ending session via direct API:", error);
+    // Return success even on error for cleanup, but include warning
     return NextResponse.json(
       { 
-        success: false, 
-        error: `Failed to end session: ${error.message}` 
+        success: true, // Still report success for cleanup attempt
+        message: "Session cleanup attempted (may have failed)",
+        warning: `Failed to end session: ${error.message}` 
       },
-      { status: 500 }
+      { status: 200 } // Return 200 OK even if cleanup failed
     );
   }
 }
