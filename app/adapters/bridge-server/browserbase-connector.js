@@ -19,15 +19,18 @@ export async function createSession(options = {}) {
       }
     });
 
-    if (response.data && response.data.id) {
-      activeSession = response.data;
-      return {
-        id: activeSession.id,
-        debug_url: `${WEBUI_URL}/session/${activeSession.id}`,
-        connect_url: `${WEBUI_URL}/session/${activeSession.id}/ws`,
-        ws_url: `${WEBUI_URL}/session/${activeSession.id}/ws`,
-        browser_version: 'Web UI Browser'
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Unknown error creating session');
+    }
+
+    if (response.data.sessionId) {
+      activeSession = {
+        id: response.data.sessionId,
+        debug_url: response.data.debugUrl || `${WEBUI_URL}/session/${response.data.sessionId}`,
+        connect_url: response.data.connectUrl || `${WEBUI_URL}/session/${response.data.sessionId}/ws`,
+        ws_url: response.data.wsUrl || `${WEBUI_URL}/session/${response.data.sessionId}/ws`
       };
+      return activeSession;
     } else {
       throw new Error('Invalid session response from Web UI');
     }
@@ -47,6 +50,9 @@ export async function navigate(url) {
     args: { url }
   });
 
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Navigation failed');
+  }
   return response.data;
 }
 
@@ -60,6 +66,9 @@ export async function click(selector) {
     args: { selector }
   });
 
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Click action failed');
+  }
   return response.data;
 }
 
@@ -73,6 +82,9 @@ export async function type(selector, text) {
     args: { selector, text }
   });
 
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Type action failed');
+  }
   return response.data;
 }
 
@@ -86,6 +98,9 @@ export async function extract(selector) {
     args: { selector }
   });
 
+  if (!response.data.extraction) {
+    throw new Error(response.data.error || 'Extraction failed');
+  }
   return response.data.extraction;
 }
 
@@ -95,10 +110,16 @@ export async function closeSession() {
   }
 
   try {
-    await axios.post(`${API_URL}/close_session`, {
+    const response = await axios.post(`${API_URL}/close_session`, {
       session_id: activeSession.id,
       args: {}
     });
+
+    if (!response.data.success) {
+      console.warn('Session close warning:', response.data.warning || 'Unknown warning');
+    }
+  } catch (error) {
+    console.error('Error closing session:', error);
   } finally {
     activeSession = null;
   }
