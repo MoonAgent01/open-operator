@@ -1,38 +1,22 @@
 @echo off
-echo ===================================================
-echo Starting Open Operator with Web UI Backend Integration
-echo ===================================================
+echo Starting Open Operator Integration...
+
 echo.
-
-REM Set environment variables for the ports
-set WEBUI_PORT=7788
-set BRIDGE_PORT=7789
-set FRONTEND_PORT=3000
-
-REM Create port files for service discovery
-echo %WEBUI_PORT% > .webui_port-port
-echo %BRIDGE_PORT% > .bridge_port-port
-echo %FRONTEND_PORT% > .frontend_port-port
-
-echo Starting Web UI backend service...
-start cmd /k "cd ..\web-ui && python webui.py"
+echo [1/3] Starting Web UI backend...
+start cmd /k "cd /d D:\AI Agent\web-ui && python webui.py"
 timeout /t 5
 
-echo Starting Bridge server...
-start cmd /k "cd app\adapters\bridge-server && node server.js"
+echo.
+echo [2/3] Starting Bridge Server...
+start cmd /k "cd /d D:\AI Agent\open-operator\app\adapters\bridge-server && npm start"
 timeout /t 3
 
-echo Starting Open Operator frontend...
-start cmd /k "npm run dev"
+echo.
+echo [3/3] Starting Open Operator frontend...
+start cmd /k "cd /d D:\AI Agent\open-operator && npm run dev"
 
 echo.
-echo All services started successfully!
+echo All services started. Open http://localhost:3000 to use the integrated system.
 echo.
-echo - Web UI backend is running on port %WEBUI_PORT%
-echo - Bridge server is running on port %BRIDGE_PORT%
-echo - Frontend is running on port %FRONTEND_PORT%
+echo For troubleshooting, see BROWSERBASE_INTEGRATION.md
 echo.
-echo Navigate to http://localhost:3000 in your browser to use the application.
-echo.
-echo To stop all services, close the terminal windows.
-echo ===================================================

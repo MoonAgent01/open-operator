@@ -1,297 +1,208 @@
-# Bridge Server for Open Operator + Web UI Integration
+# WebUI Bridge Server
 
-This bridge server connects Open Operator to the Web UI, enabling a unified browser automation experience with flexible browser environment selection.
+This bridge server connects Open Operator frontend with Web UI browser automation backend, allowing seamless control of browser sessions.
+
+## Overview
+
+The WebUI Bridge Server acts as an intermediary between Open Operator's frontend and Web UI's browser automation backend. It enables users to:
+
+1. Use Open Operator's modern UI to control Web UI's powerful browser automation
+2. Seamlessly choose between native browser mode and external browser mode
+3. Maintain all browser automation capabilities while using a unified interface
 
 ## Architecture
 
-The bridge server functions as an integration layer with several key responsibilities:
+```
+Open Operator Frontend (3000) → Bridge Server (7789) → Web UI Backend (7788)
+```
 
-1. **Session Management**
-   - Creates and maintains browser sessions
-   - Associates sessions with user contexts
-   - Handles browser environment selection
-   - Implements graceful cleanup
+## How It Works
 
-2. **Browser Control**
-   - Manages Browserbase integration via Node.js SDK or Python connector
-   - Handles fallback mechanisms when primary methods fail
-   - Configures WebUI for external browser control when needed
-   - Unifies browser control behind consistent API
+The bridge server abstracts away the differences between browser environments by:
 
-3. **Communication Layer**
-   - Exposes REST endpoints for frontend interaction
-   - Forwards requests to appropriate backend services
-   - Translates response formats for frontend consumption
-   - Handles WebSocket connections for real-time data
+1. **Unified API**: Presenting a standard set of endpoints for browser control
+2. **Intelligent Routing**: Directing commands to the appropriate backend
+3. **Error Handling**: Providing fallbacks and graceful degradation
+4. **Stateful Sessions**: Maintaining session state across all components
 
-## Unified Browser Flag System
+## Key Components
 
-The bridge server implements a unified browser selection approach using a single `useBrowserbase` flag:
+### Browserbase Connector
 
-- **Flag Value**: `useBrowserbase: true/false`
-- **True**: Uses Browserbase for browser control
-- **False**: Uses WebUI's native browser
+The `browserbase-connector.js` module provides:
 
-This flag is set based on frontend selection and determines the entire browser control flow.
+- Session creation and management with Web UI
+- Execution of browser actions (navigate, click, type, etc.)
+- Intent processing for AI agent actions
+- Screenshot and content extraction capabilities
+
+### Session Manager
+
+The `session-manager.js` module:
+
+- Tracks active browser sessions
+- Monitors for task completion and loop detection
+- Maintains browser state across requests
+- Handles session cleanup
 
 ## API Endpoints
 
-### `GET /health`
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Health check for bridge server |
+| `/health` | GET | Detailed health status |
+| `/session` | POST | Create new browser session |
+| `/intent` | POST | Process AI agent intent |
+| `/execute` | POST | Execute browser action |
+| `/session` | DELETE | Close and delete session |
 
-Check the health of the bridge server and connected services.
+## Environment Variables
 
-**Response:**
-```json
-{
-  "status": "ok",
-  "activeSessions": 2,
-  "activeWebSockets": 1,
-  "ports": {
-    "webui": 7788,
-    "bridge": 7789
-  },
-  "webui_status": "ok",
-  "browserbase_status": "ok"
-}
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 7789 | Bridge server port |
+| `WEBUI_PORT` | 7788 | Web UI backend port |
+| `WEBUI_URL` | `http://localhost:7788` | Web UI base URL |
+| `BROWSERBASE_API_KEY` | - | Browserbase API key (optional) |
+| `OPENAI_API_KEY` | - | OpenAI API key (optional) |
+
+## Starting the Server
+
+```bash
+cd "AI Agent/open-operator/app/adapters/bridge-server"
+npm install
+node server.js
 ```
 
-### `POST /session`
+Or use the restart script:
 
-Create a new browser session with specific browser environment.
+```bash
+cd "AI Agent"
+./open-operator/restart-services.bat
+```
 
-**Request:**
+## Browser Types
+
+The bridge server supports two browser modes:
+
+1. **Native Browser** (default)
+   - Uses Web UI's built-in browser
+   - No external dependencies
+   - Simple setup and configuration
+
+2. **Browserbase Mode**
+   - Connects to Web UI's "Use Own Browser" feature
+   - More flexibility for persistent sessions
+   - Supports user data profiles
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Connection Errors**
+   - Verify all services are running (Web UI, Bridge Server, Open Operator)
+   - Check ports are not blocked or in use by other applications
+   - Ensure environment variables are correctly set
+
+2. **Browser Control Issues**
+   - Check logs for browser session creation failures
+   - Verify Web UI is properly configured
+   - Use proper selectors for page elements
+
+3. **Integration Errors**
+   - Look for 404 errors which indicate API mismatch
+   - Check payload formats if receiving 400 errors
+   - Verify service URLs are correct
+
+### Logs to Check
+
+Run with verbose logging:
+
+```bash
+DEBUG=true node server.js
+```
+
+Check the following sections in logs:
+
+- `[WebUI Check]` - Web UI availability and API endpoints
+- `[Session Creation]` - Browser session initialization
+- `[Intent]` - AI agent intent processing
+- `[Execute]` - Browser action execution
+- `[WebUI Connector]` - Connector API communication
+
+## API Reference
+
+### Create Session
+
+```
+POST /session
+```
+
+Request:
 ```json
 {
-  "timezone": "UTC",
-  "contextId": "my-session",
+  "contextId": "open youtube",
   "settings": {
-    "useBrowserbase": true,
-    "browserType": "browserbase",
+    "useBrowserbase": false,
+    "browserType": "native",
+    "headless": false,
     "browserSettings": {
-      "useExistingBrowser": false,
-      "keepBrowserOpen": true,
-      "keepBrowserOpenBetweenTasks": true,
-      "headless": false,
       "windowSize": {
         "width": 1366,
         "height": 768
-      },
-      "showBrowser": true
+      }
     }
   }
 }
 ```
 
-**Response:**
+### Process Intent
+
+```
+POST /intent
+```
+
+Request:
 ```json
 {
-  "success": true,
-  "sessionId": "session-1743139675619",
-  "contextId": "my-session",
-  "sessionUrl": "http://localhost:7788/browser/session-1743139675619",
-  "connectUrl": "ws://localhost:7788/ws",
-  "wsUrl": "ws://localhost:7788/ws",
-  "debugUrl": "http://localhost:7788"
+  "sessionId": "session-1234567890",
+  "goal": "open youtube",
+  "previousSteps": [],
+  "context": {}
 }
 ```
 
-### `DELETE /session`
+### Execute Step
 
-End a browser session.
-
-**Request:**
-```json
-{
-  "sessionId": "session-1743139675619"
-}
+```
+POST /execute
 ```
 
-**Response:**
+Request:
 ```json
 {
-  "success": true,
-  "message": "Session ended successfully"
-}
-```
-
-### `POST /intent`
-
-Process agent intent for the next browser action.
-
-**Request:**
-```json
-{
-  "goal": "Open YouTube",
-  "sessionId": "session-1743139675619",
-  "previousSteps": []
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "result": {
-    "tool": "NAVIGATE",
-    "args": {
-      "url": "https://youtube.com"
-    },
-    "text": "Navigating to YouTube",
-    "reasoning": "Based on the user goal to open YouTube",
-    "instruction": "Opening the YouTube website"
-  }
-}
-```
-
-### `POST /execute`
-
-Execute a specific browser action.
-
-**Request:**
-```json
-{
-  "sessionId": "session-1743139675619",
+  "sessionId": "session-1234567890",
   "step": {
     "tool": "NAVIGATE",
     "args": {
       "url": "https://youtube.com"
     },
     "text": "Navigating to YouTube",
-    "reasoning": "Based on the user goal to open YouTube",
-    "instruction": "Opening the YouTube website"
+    "reasoning": "Opening the requested site",
+    "instruction": "Opening YouTube"
   }
 }
 ```
 
-**Response:**
+### Close Session
+
+```
+DELETE /session
+```
+
+Request:
 ```json
 {
-  "success": true,
-  "result": {
-    "url": "https://youtube.com",
-    "content": "<html>...</html>",
-    "text": "Navigating to YouTube",
-    "reasoning": "Based on the user goal to open YouTube",
-    "instruction": "Opening the YouTube website"
-  }
+  "sessionId": "session-1234567890"
 }
 ```
-
-## Browser Initialization Flow
-
-The bridge server implements a sophisticated fallback chain for browser initialization:
-
-1. **Primary Method**: Node.js Browserbase SDK
-   ```
-   [Bridge Server] Attempting to use Node.js Browserbase SDK
-   ```
-
-2. **First Fallback**: Python Browserbase Connector
-   ```
-   [Bridge Server] Node.js SDK failed, falling back to Python connector
-   ```
-
-3. **Final Fallback**: WebUI Native Browser
-   ```
-   [Bridge Server] Falling back to WebUI native browser
-   ```
-
-This ensures robust browser initialization regardless of environment limitations.
-
-## Session Management
-
-The server maintains session state with comprehensive tracking:
-
-- **Session Creation**: Associates browserType with sessionId
-- **Context Tracking**: Maintains user context across tasks
-- **Loop Detection**: Prevents infinite execution cycles
-- **Task History**: Tracks completed tasks to prevent duplication
-- **Error Recovery**: Implements graceful handling of failures
-
-## Logging System
-
-The bridge server implements comprehensive logging:
-
-```
-[Session Creation] POST /session received: {...}
-[Bridge Server] Creating session with browser type: browserbase
-[Bridge Server] Using Browserbase: true
-[Bridge Server] Browser type details: {...}
-[Session Creation] Response: {...}
-```
-
-Logging levels and prefixes provide clear indication of system state.
-
-## Configuration
-
-The bridge server supports configuration through:
-
-### Environment Variables
-
-```
-WEBUI_PORT=7788
-BRIDGE_PORT=7789
-BROWSERBASE_API_KEY=your_key
-```
-
-### Port Files
-
-- `.webui_port-port`: Contains WebUI port number
-- `.bridge_port-port`: Contains bridge server port number
-
-## Installation
-
-```bash
-cd app/adapters/bridge-server
-npm install
-```
-
-## Running
-
-```bash
-node server.js
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Connection Failures**
-   - Check that WebUI is running on the configured port
-   - Verify network connectivity between services
-   - Check for port conflicts
-
-2. **Browser Initialization Failures**
-   - Review logs for specific initialization errors
-   - Check Browserbase credentials if applicable
-   - Verify fallback chain is completing
-
-3. **Session Management Issues**
-   - Monitor session creation and termination
-   - Check for orphaned sessions
-   - Review session cleanup logic
-
-### Debug Logging
-
-To enable enhanced debug logging:
-
-```bash
-DEBUG=true node server.js
-```
-
-This provides detailed information on:
-- Session creation
-- Browser initialization
-- Intent processing
-- Execution steps
-- Fallback mechanisms
-
-### Health Check
-
-To verify all components are operational:
-
-```bash
-curl http://localhost:7789/health
-```
-
-This returns status information for the bridge server, WebUI, and browser environments.

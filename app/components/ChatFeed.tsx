@@ -145,18 +145,14 @@ export default function ChatFeed({ initialMessage, onClose }: ChatFeedProps) {
           agentStateRef.current = {
             ...agentStateRef.current,
             sessionId: sessionData.sessionId,
-            sessionUrl: sessionData.sessionUrl.replace(
-              "https://www.browserbase.com/devtools-fullscreen/inspector.html",
-              "https://www.browserbase.com/devtools-internal-compiled/index.html"
-            ),
+            // Use the sessionUrl directly from the backend response
+            sessionUrl: sessionData.sessionUrl, 
           };
 
           setUiState({
             sessionId: sessionData.sessionId,
-            sessionUrl: sessionData.sessionUrl.replace(
-              "https://www.browserbase.com/devtools-fullscreen/inspector.html",
-              "https://www.browserbase.com/devtools-internal-compiled/index.html"
-            ),
+            // Use the sessionUrl directly from the backend response
+            sessionUrl: sessionData.sessionUrl,
             steps: [],
           });
 

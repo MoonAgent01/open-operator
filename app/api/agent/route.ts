@@ -126,12 +126,13 @@ export async function POST(request: NextRequest) {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              goal: goal,
-              context: { isFirstStep: true }
-            }),
-          });
+             },
+             body: JSON.stringify({
+               goal: goal,
+               sessionId: sessionData.sessionId, // Pass the obtained sessionId
+               context: { isFirstStep: true }
+             }),
+           });
 
           const intentData = await intentResponse.json();
           

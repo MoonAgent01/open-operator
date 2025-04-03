@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { AnimatePresence } from "framer-motion";
 import ChatFeed from "./components/ChatFeed";
 import AnimatedButton from "./components/AnimatedButton";
@@ -20,6 +21,27 @@ const Tooltip = ({ children, text }: { children: React.ReactNode; text: string }
     </div>
   );
 };
+
+// Component to read search params and potentially auto-start chat
+function SearchParamHandler({ setInitialMessage, startChat }: { setInitialMessage: (msg: string) => void, startChat: (msg: string) => void }) {
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const messageParam = searchParams.get("message");
+    if (messageParam) {
+      console.log("Found message param:", messageParam);
+      // Set the initial message state but don't auto-start chat yet
+      setInitialMessage(messageParam);
+      // Optionally, uncomment the line below to auto-start chat
+      // startChat(messageParam); 
+    }
+    // Intentionally run only once on mount after params are available
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array ensures it runs once
+
+  return null; // This component doesn't render anything itself
+}
+
 
 export default function Home() {
   const [isChatVisible, setIsChatVisible] = useState(false);
@@ -79,9 +101,12 @@ export default function Home() {
   );
 
   return (
-    <AnimatePresence mode="wait">
-      {!isChatVisible ? (
-        <div className="min-h-screen bg-gray-50 flex flex-col">
+    // Wrap the part that uses SearchParamHandler in Suspense
+    <Suspense fallback={<div>Loading...</div>}> 
+      <SearchParamHandler setInitialMessage={setInitialMessage} startChat={startChat} />
+      <AnimatePresence mode="wait">
+        {!isChatVisible ? (
+          <div className="min-h-screen bg-gray-50 flex flex-col">
           <nav className="flex justify-between items-center px-8 py-4 bg-white border-b border-gray-200">
             <div className="flex items-center gap-3">
               <Image
@@ -223,8 +248,9 @@ export default function Home() {
         <ChatFeed
           initialMessage={initialMessage}
           onClose={() => setIsChatVisible(false)}
-        />
-      )}
-    </AnimatePresence>
+          />
+        )}
+      </AnimatePresence>
+    </Suspense>
   );
 }
