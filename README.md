@@ -1,162 +1,141 @@
-# Open Operator + Web UI Integration
+# Open Operator Frontend
 
-This project implements Open Operator as a frontend for the Web UI browser automation backend, using VSCode's Model Context Protocol (MCP) for direct communication between components.
+This project implements Open Operator as a frontend for the Web UI browser automation backend. Tasks are sent via MCP to Web UI, which then uses the Modified Browserbase SDK for browser control.
 
 ## Architecture
 
-The system consists of two main components:
+The system consists of these components working together:
 
 1. **Open Operator Frontend** (Next.js, Port 3000)
-   - Modern UI for interacting with the AI agent
-   - Real-time task execution monitoring
-   - Direct MCP communication with Web UI
-   - WebSocket-based browser session management
+   - Modern, responsive user interface for task input
+   - Sends task requests via MCP to Web UI
+   - Displays execution progress and results
+   - Communicates with Bridge Server for session management
 
-2. **Web UI Backend** (Python, Port 7788)
-   - Contains the AI agent logic and LLM capabilities
-   - Exposes browser control via MCP tools
-   - Maintains session state and context
-   - Provides structured action results
+2. **Web UI Backend** (Python/MCP Server, Port 7788)
+   - Receives tasks via MCP from Open Operator
+   - Processes tasks and determines required actions
+   - **Selects "Browserbase" as execution method**
+   - Sends browser commands to Modified Browserbase SDK
+   - Returns results via MCP to Open Operator
+
+3. **Modified Browserbase SDK**
+   - Receives commands from Web UI engine
+   - Uses local Playwright to control browser
+   - **Does NOT use Browserbase cloud service**
+   - Returns execution results to Web UI
+
+4. **Bridge Server** (Node.js, Port 7789)
+   - Handles session management and initialization
+   - Required for proper system operation
+   - Part of the communication flow
 
 ## Quick Start
 
-To start the system:
+The components must be started in this specific order:
 
 1. **Start Web UI Backend**
 ```bash
-cd "D:\New folder (2)\AI Agent\web-ui"  
+cd "D:\AI Agent\AI Agent\web-ui"  
 .\setup_env.ps1
 .\start_app.ps1
 ```
 
-2. **Start Open Operator Frontend**
+2. **Start MCP Server**
 ```bash
-cd "d:/AI Agent/AI Agent/open-operator"
-pnpm install  
-pnpm dev
+cd "D:\AI Agent"
+.\start_mcp_server.bat
 ```
 
-Optional: Start Bridge Server (for compatibility/fallback)
+3. **Start Bridge Server**
 ```bash
 cd "D:\AI Agent\AI Agent\open-operator\app\adapters\bridge-server"
 npm install 
 npm start
 ```
 
-## Components
+4. **Start Open Operator Frontend**
+```bash
+cd "d:/AI Agent/AI Agent/open-operator"
+pnpm install  
+pnpm dev
+```
 
-### Frontend UI
+## Communication Flow
 
-The ChatFeed component (`app/components/ChatFeed.tsx`) handles:
-- Task session creation via MCP
-- Real-time execution monitoring
-- Step-by-step progress display
-- Error state management
-- Session cleanup
+1. **Task Initiation**
+   - User enters task in Open Operator UI
+   - Frontend sends task via MCP to Web UI
+   - Web UI processes task and selects "Browserbase"
 
-### MCP Integration
+2. **Command Execution**
+   - Web UI sends commands to Modified Browserbase SDK
+   - SDK controls browser using local Playwright
+   - Results flow back through Web UI to Open Operator
 
-Open Operator uses VSCode's MCP to communicate with Web UI:
+3. **Session Management**
+   - Bridge Server handles session lifecycle
+   - Web UI maintains browser state
+   - Clean termination on task completion
 
-1. **Session Management**
-   - Creates browser sessions via MCP tools
-   - Maintains session state between steps
-   - Handles clean session termination
+## Configuration
 
-2. **Task Execution**
-   - Uses Web UI's LLM for step determination
-   - Executes browser actions via MCP tools
-   - Receives structured results from Web UI
+### Environment Variables
+```bash
+# Required Ports
+FRONTEND_PORT=3000    # Open Operator UI
+WEBUI_PORT=7788      # Web UI MCP Server
+BRIDGE_PORT=7789     # Bridge Server
 
-3. **Browser Control**
-   - Direct browser automation through MCP
-   - Support for common actions (navigate, click, type)
-   - Content extraction capabilities
-
-## MCP Tools
-
-The system leverages these MCP tools:
-
-| Tool | Description |
-|------|-------------|
-| `create_session` | Initialize new browser sessions |
-| `navigate` | Navigate to URLs |
-| `click` | Click page elements |
-| `type` | Enter text into fields |
-| `extract` | Extract content from pages |
-| `determine_next_step` | Get LLM-determined next action |
+# Optional Settings
+LOG_LEVEL=debug
+ENABLE_DEBUG_LOGGING=true
+```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Startup Problems**
-   - Ensure Web UI is running first
-   - Check VSCode with Claude extension is running
-   - Verify MCP configuration in settings
+1. **Connection Problems**
+   - Verify all components are running in correct order
+   - Check port availability (3000, 7788, 7789)
+   - Monitor terminal output for each component
 
 2. **Task Execution Issues**
-   - Check Web UI logs for LLM errors
+   - Check Web UI logs for command processing
+   - Verify Bridge Server connectivity
    - Monitor browser process status
-   - Verify page content is accessible
 
-3. **Integration Problems**
-   - Check MCP tool registration
-   - Verify Web UI server is responsive
-   - Monitor VSCode MCP connection
+3. **Browser Control Issues**
+   - Verify Web UI can communicate with Modified SDK
+   - Check Playwright installation
+   - Monitor browser process logs
 
-### Debugging Tips
+### Debugging
 
-1. **Frontend**
-   - Use browser DevTools
-   - Check WebSocket connections
-   - Monitor API requests/responses
-
-2. **MCP Tools**
-   - Check VSCode Output panel
-   - Monitor Web UI MCP logs
-   - Verify tool registration
-
-## Development
-
-### Key Files
-
-#### Frontend
-- `app/components/ChatFeed.tsx`: Task execution interface
-- `app/api/session/route.ts`: Session management
-- `app/api/agent/route.ts`: Agent execution
-- `types/global.d.ts`: MCP type definitions
-
-#### API Routes
-- `app/api/session/route.ts`: Session lifecycle
-- `app/api/agent/route.ts`: Task execution
-
-### Adding Features
-
-1. **Frontend Changes**
-   - Add components to `app/components`
-   - Update API routes in `app/api`
-   - Extend type definitions if needed
-
-2. **MCP Integration**
-   - Update MCP tool usage in routes
-   - Handle new response types
-   - Add error handling
-
-## Environment Variables
-
+1. **Component Status**
 ```bash
-# Ports
-FRONTEND_PORT=3000
-WEBUI_PORT=7788
+# Check Web UI MCP Server
+curl http://localhost:7788/health
 
-# Optional Bridge Server
-BRIDGE_PORT=7789
+# Check Bridge Server
+curl http://localhost:7789/health
 
-# Logging
-LOG_LEVEL=debug
-ENABLE_DEBUG_LOGGING=true
+# Check Frontend
+curl http://localhost:3000/api/health
 ```
+
+2. **Log Monitoring**
+   - Check all terminal windows for errors
+   - Enable debug logging if needed
+   - Monitor browser console output
+
+## Important Notes
+
+- Keep all terminal windows open during operation
+- Start components in the specified order
+- The system uses local browser control, not Browserbase cloud
+- Modified SDK uses Playwright for browser automation
 
 ## License
 

@@ -1,109 +1,113 @@
-# WebUI Bridge Server (Optional MCP Compatibility Layer)
+# Bridge Server for Open Operator
 
-This bridge server provides a compatibility layer between Open Operator frontend and Web UI backend, though it's now optional due to direct MCP integration.
+This Node.js server acts as part of the communication pathway between Open Operator and Web UI, facilitating session management and browser control.
 
-## Overview
+## Role in Architecture
 
-With the new MCP integration, direct communication between Open Operator and Web UI is handled through VSCode's Model Context Protocol. However, this bridge server remains available as:
+The Bridge Server is a required component in the system, serving these functions:
 
-1. A compatibility layer for systems not using MCP
-2. A fallback mechanism if needed
-3. A way to maintain backward compatibility
+1. **Communication Relay**
+   - Receives requests from Open Operator API routes
+   - Acts as an MCP client to the Web UI server
+   - Returns results back to Open Operator
 
-## Architecture
+2. **Session Management**
+   - Helps manage browser session lifecycle
+   - Maintains session state information
+   - Assists in clean session termination
 
-Modern Flow (Recommended):
+3. **Command Processing**
+   - Forwards task requests to Web UI's MCP server
+   - Receives command results from Web UI
+   - Relays status updates back to Open Operator
+
+## System Flow
+
 ```
-Open Operator Frontend (3000) → VSCode MCP → Web UI Backend (7788)
+Open Operator Frontend (3000) → Bridge Server (7789) → Web UI MCP Server (7788) → Modified Browserbase SDK → Local Browser
 ```
 
-Legacy Flow (Optional):
+## Setup and Running
+
+1. **Install Dependencies:**
+```bash
+cd "D:\AI Agent\AI Agent\open-operator\app\adapters\bridge-server"
+npm install
 ```
-Open Operator Frontend (3000) → Bridge Server (7789) → Web UI Backend (7788)
+
+2. **Start the Server:**
+```bash
+npm start
+```
+*Note: The Web UI MCP Server must be running first (`start_mcp_server.bat`).*
+
+## Configuration
+
+### Environment Variables
+```bash
+# Required Settings
+PORT=7789                      # Bridge Server port
+WEBUI_PORT=7788               # Web UI MCP Server port
+WEBUI_URL=http://localhost:7788
+
+# Optional Settings
+LOG_LEVEL=debug               # For detailed logging
 ```
 
 ## Key Components
 
-### Browserbase Connector
+### MCP Client Logic
+- Located in relevant JavaScript modules
+- Manages MCP communication with Web UI
+- Handles tool calls and responses
 
-The `browserbase-connector.js` module now:
-- Acts as an MCP proxy for browser operations
-- Maintains compatibility with existing code
-- Translates between old and new APIs
+### Session Management
+- Tracks active browser sessions
+- Maintains session state
+- Handles cleanup on completion
 
-### Session Manager
+## Important Notes
 
-The `session-manager.js` module provides:
-- Legacy session management support
-- State tracking for non-MCP flows
-- Compatibility with older integrations
+- This server must be running for Open Operator to function correctly
+- It's a required part of the communication chain
+- Verify Web UI MCP Server is running before starting this server
+- Keep the terminal window open during operation
 
-## Starting the Server (Optional)
-
-Only needed if not using MCP or requiring backwards compatibility:
-
-```bash
-cd "AI Agent/open-operator/app/adapters/bridge-server"
-npm install
-npm start
-```
-
-## Environment Variables
-
-```bash
-# Bridge Server (Optional)
-PORT=7789
-WEBUI_PORT=7788
-WEBUI_URL=http://localhost:7788
-
-# Compatibility Settings
-USE_MCP=true # Set to false to force legacy mode
-```
-
-## API Endpoints (Legacy Support)
-
-These endpoints remain available for backward compatibility:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/session` | POST | Create browser session |
-| `/execute` | POST | Execute browser action |
-| `/session` | DELETE | Close session |
-
-## Troubleshooting
+## Debugging
 
 ### Common Issues
 
-1. **MCP vs Legacy Mode**
-   - Check if VSCode/Claude extension is running (for MCP)
-   - Verify MCP server registration in settings
-   - Fall back to bridge server if needed
+1. **Connection Problems**
+   - Verify Web UI MCP Server is running (`localhost:7788`)
+   - Check port availability (7789)
+   - Monitor network requests/responses
 
-2. **Browser Control**
-   - Verify Web UI is running and accessible
-   - Check process/port conflicts
-   - Monitor browser session state
+2. **Session Issues**
+   - Check session creation logs
+   - Verify MCP communication
+   - Monitor session state
 
-3. **API Compatibility**
-   - Ensure correct endpoint usage
-   - Check payload formats
-   - Verify response handling
+### Logging
 
-### Debug Mode
-
-Run with verbose logging:
+Enable debug output:
 ```bash
-DEBUG=true node server.js
+DEBUG=true npm start
 ```
 
-## Migration to MCP
+Monitor logs for:
+- MCP communication
+- Session management
+- Error messages
 
-To migrate from bridge server to direct MCP:
+## API Reference
 
-1. Update VSCode settings to include Web UI MCP server
-2. Remove bridge server from startup sequence
-3. Update Open Operator to use MCP tools
-4. Keep bridge server as fallback if needed
+Internal endpoints used by Open Operator:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/session` | POST | Create new sessions |
+| `/session` | DELETE | Clean up sessions |
+| `/execute` | POST | Execute browser actions |
 
 ## License
 

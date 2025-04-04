@@ -1,43 +1,32 @@
 import axios from 'axios';
 
+// Import MCP utilities
+import { use_mcp_tool } from '../../utils/mcp';
+
 let activeSession = null;
 const WEBUI_URL = process.env.NEXT_PUBLIC_WEBUI_URL || 'http://localhost:7788';
-const API_URL = `${WEBUI_URL}/api`;
+// Use the base URL for session endpoint, as it might be directly at /session instead of /api/session
+const API_URL = `${WEBUI_URL}`;
 
 export async function createSession(options = {}) {
-  try {
-    const response = await axios.post(`${API_URL}/session`, {
-      headless: false,
+  console.log('Creating session using MCP');
+  const result = await use_mcp_tool({
+    server_name: 'webui-browser',
+    tool_name: 'create_session',
+    arguments: {
       width: options.width || 1366,
-      height: options.height || 768,
-      timezone: options.timezone || "UTC",
-      contextId: options.contextId || "",
-      settings: {
-        headless: false,
-        disableSecurity: true,
-        ...options.settings
-      }
-    });
-
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Unknown error creating session');
+      height: options.height || 768
     }
+  });
 
-    if (response.data.sessionId) {
-      activeSession = {
-        id: response.data.sessionId,
-        debug_url: response.data.debugUrl || `${WEBUI_URL}/session/${response.data.sessionId}`,
-        connect_url: response.data.connectUrl || `${WEBUI_URL}/session/${response.data.sessionId}/ws`,
-        ws_url: response.data.wsUrl || `${WEBUI_URL}/session/${response.data.sessionId}/ws`
-      };
-      return activeSession;
-    } else {
-      throw new Error('Invalid session response from Web UI');
-    }
-  } catch (error) {
-    console.error('Error creating session:', error);
-    throw error;
-  }
+  console.log('Session created successfully via MCP:', result);
+  activeSession = {
+    id: result,
+    debug_url: `${WEBUI_URL}/session/${result}`,
+    connect_url: `${WEBUI_URL}/session/${result}/ws`,
+    ws_url: `${WEBUI_URL}/session/${result}/ws`
+  };
+  return activeSession;
 }
 
 export async function navigate(url) {
@@ -45,15 +34,14 @@ export async function navigate(url) {
     throw new Error('No active session');
   }
 
-  const response = await axios.post(`${API_URL}/navigate`, {
-    session_id: activeSession.id,
-    args: { url }
+  return await use_mcp_tool({
+    server_name: 'webui-browser',
+    tool_name: 'navigate',
+    arguments: {
+      session_id: activeSession.id,
+      url
+    }
   });
-
-  if (!response.data.success) {
-    throw new Error(response.data.error || 'Navigation failed');
-  }
-  return response.data;
 }
 
 export async function click(selector) {
@@ -61,15 +49,14 @@ export async function click(selector) {
     throw new Error('No active session');
   }
 
-  const response = await axios.post(`${API_URL}/click`, {
-    session_id: activeSession.id,
-    args: { selector }
+  return await use_mcp_tool({
+    server_name: 'webui-browser',
+    tool_name: 'click',
+    arguments: {
+      session_id: activeSession.id,
+      selector
+    }
   });
-
-  if (!response.data.success) {
-    throw new Error(response.data.error || 'Click action failed');
-  }
-  return response.data;
 }
 
 export async function type(selector, text) {
@@ -77,15 +64,15 @@ export async function type(selector, text) {
     throw new Error('No active session');
   }
 
-  const response = await axios.post(`${API_URL}/type`, {
-    session_id: activeSession.id,
-    args: { selector, text }
+  return await use_mcp_tool({
+    server_name: 'webui-browser',
+    tool_name: 'type',
+    arguments: {
+      session_id: activeSession.id,
+      selector,
+      text
+    }
   });
-
-  if (!response.data.success) {
-    throw new Error(response.data.error || 'Type action failed');
-  }
-  return response.data;
 }
 
 export async function extract(selector) {
@@ -93,15 +80,16 @@ export async function extract(selector) {
     throw new Error('No active session');
   }
 
-  const response = await axios.post(`${API_URL}/extract`, {
-    session_id: activeSession.id,
-    args: { selector }
+  const result = await use_mcp_tool({
+    server_name: 'webui-browser',
+    tool_name: 'extract',
+    arguments: {
+      session_id: activeSession.id,
+      selector
+    }
   });
 
-  if (!response.data.extraction) {
-    throw new Error(response.data.error || 'Extraction failed');
-  }
-  return response.data.extraction;
+  return result.extraction;
 }
 
 export async function closeSession() {
@@ -110,18 +98,81 @@ export async function closeSession() {
   }
 
   try {
-    const response = await axios.post(`${API_URL}/close_session`, {
-      session_id: activeSession.id,
-      args: {}
+    await use_mcp_tool({
+      server_name: 'webui-browser',
+      tool_name: 'close_session',
+      arguments: {
+        session_id: activeSession.id
+      }
     });
-
-    if (!response.data.success) {
-      console.warn('Session close warning:', response.data.warning || 'Unknown warning');
-    }
-  } catch (error) {
-    console.error('Error closing session:', error);
+    console.log('Session closed successfully via MCP');
   } finally {
     activeSession = null;
+  }
+}
+
+// Helper function to execute a step using MCP
+export async function executeStep(_, step) { // Ignore sessionId parameter, use activeSession
+  if (!activeSession) {
+    throw new Error('No active session');
+  }
+
+  const tool = step.tool.toLowerCase();
+  console.log(`[MCP] Executing step with tool: ${tool}`);
+
+  try {
+    switch (tool) {
+      case 'determine_next_step':
+        return {
+          result: await use_mcp_tool({
+            server_name: 'webui-browser',
+            tool_name: 'determine_next_step',
+            arguments: {
+              session_id: activeSession.id,
+              goal: step.args.goal,
+              previous_steps: step.args.previous_steps || []
+            }
+          })
+        };
+
+      case 'navigate':
+      case 'goto':
+        return { result: await navigate(step.args.url) };
+
+      case 'click':
+      case 'act':
+        return { result: await click(step.args.selector) };
+
+      case 'type':
+        return { result: await type(step.args.selector, step.args.text) };
+
+      case 'extract':
+        const extraction = await extract(step.args.selector);
+        return { result: { extraction } };
+
+      case 'close':
+      case 'close_session':
+        await closeSession();
+        return { result: { success: true, message: 'Session closed' } };
+
+      case 'screenshot':
+        return {
+          result: await use_mcp_tool({
+            server_name: 'webui-browser',
+            tool_name: 'take_screenshot',
+            arguments: {
+              session_id: activeSession.id,
+              full_page: step.args.fullPage || false
+            }
+          })
+        };
+
+      default:
+        throw new Error(`Unsupported tool: ${tool}`);
+    }
+  } catch (error) {
+    console.error(`[MCP] Error executing ${tool}:`, error);
+    throw error;
   }
 }
 
@@ -132,5 +183,6 @@ export const browserbase = {
   click,
   type,
   extract,
-  closeSession
+  closeSession,
+  executeStep
 };
